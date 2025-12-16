@@ -56,7 +56,7 @@ export async function verifyOtp(req, res) {
 
 export async function login(req, res) {
   try {
-    const data = await loginService({
+    const { accessToken, refreshToken } = await loginService({
       email: req.body.email,
       password: req.body.password,
       ip: req.ip,
@@ -65,12 +65,15 @@ export async function login(req, res) {
 
     res.json({
       success: true,
-      data
+      data: {
+        accessToken,
+        refreshToken
+      }
     });
   } catch (e) {
     res.status(400).json({
       success: false,
-      message: e.message
+      message: 'Invalid credentials'
     });
   }
 }
