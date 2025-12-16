@@ -56,14 +56,24 @@ export async function verifyOtp(req, res) {
 
 export async function login(req, res) {
   try {
+    const { email, password, fcmToken } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email and password are required'
+      });
+    }
+
     const { accessToken, refreshToken } = await loginService({
-      email: req.body.email,
-      password: req.body.password,
+      email,
+      password,
       ip: req.ip,
-      device: req.headers['user-agent']
+      device: req.headers['user-agent'] || null,
+      fcmToken // 🔔 optional
     });
 
-    res.json({
+    return res.json({
       success: true,
       data: {
         accessToken,
@@ -71,12 +81,13 @@ export async function login(req, res) {
       }
     });
   } catch (e) {
-    res.status(400).json({
+    return res.status(400).json({
       success: false,
       message: 'Invalid credentials'
     });
   }
 }
+
 
 /* ================= FORGOT PASSWORD ================= */
 

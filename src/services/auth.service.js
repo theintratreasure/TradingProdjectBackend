@@ -8,7 +8,8 @@ import { generateOtp } from '../utils/otp.util.js';
 import { sendOtpMail, sendResetPasswordMail} from '../utils/mail.util.js';
 import { generateReferralCode } from '../utils/referralCode.util.js';
 import { signAccessToken } from '../utils/jwt.util.js';
-
+import UserDevice from '../models/UserDevice.model.js'
+import admin from '../config/firebase.js'
 /* ======================================================
    SIGNUP
 ====================================================== */
@@ -118,30 +119,35 @@ export async function verifyOtpService({ email, otp }) {
    LOGIN
 ====================================================== */
 
-export async function loginService({ email, password, ip, device }) {
-  //  Find user
+export async function loginService({
+  email,
+  password,
+  ip,
+  device,
+  fcmToken
+}) {
+  // 1 Find user
   const user = await User.findOne({ email: email.toLowerCase() }).lean();
   if (!user) throw new Error('Invalid credentials');
 
-  //  Find auth record
+  // 2 Find auth record
   const auth = await Auth.findOne({ user_id: user._id });
   if (!auth) throw new Error('Invalid credentials');
 
-  //  Check password
+  // 3 Check password
   const ok = await comparePassword(password, auth.password_hash);
   if (!ok) {
-    await Auth.updateOne(
+    Auth.updateOne(
       { _id: auth._id },
       { $inc: { login_attempts: 1 } }
-    );
+    ).catch(() => {});
     throw new Error('Invalid credentials');
   }
 
-  //  Generate refresh token
+  // 4️ Generate refresh token
   const refreshToken = randomToken();
-
-  // Update auth info
-  await Auth.updateOne(
+  // 5️ Update auth info
+  Auth.updateOne(
     { _id: auth._id },
     {
       $set: {
@@ -152,24 +158,50 @@ export async function loginService({ email, password, ip, device }) {
 
         refresh_token_hash: sha256(refreshToken),
         refresh_token_expires_at: new Date(
-          Date.now() + 7 * 24 * 60 * 60 * 1000 // 7 days
+          Date.now() + 7 * 24 * 60 * 60 * 1000
         ),
         refresh_token_ip: ip,
         refresh_token_device: device
       }
     }
-  );
+  )
+    .then(() => console.log(' Auth updated'))
+    .catch(err => console.error('❌ Auth update error:', err));
 
-  //  Return tokens
+  // 6️ FCM TOKEN SAVE + TOPIC SUBSCRIBE (DEBUG VERSION)
+  if (!fcmToken) {
+  } else {
+
+    process.nextTick(async () => {
+
+      try {
+        const result = await UserDevice.updateOne(
+          { fcm_token: fcmToken },
+          {
+            $set: {
+              user_id: user._id,
+              platform: 'web',
+              last_used_at: new Date()
+            }
+          },
+          { upsert: true }
+        );
+
+
+        await admin.messaging().subscribeToTopic(
+          fcmToken,
+          'all_users'
+        );
+      } catch (err) {
+        console.error('UserDevice / Firebase error:', err);
+      }
+    });
+  }
+
+  // 7 Return tokens ONLY
   return {
     accessToken: signAccessToken(user),
-    refreshToken,
-    user: {
-      id: user._id,
-      name: user.name,
-      email: user.email,
-      role: user.role
-    }
+    refreshToken
   };
 }
 
