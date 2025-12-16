@@ -35,6 +35,19 @@ const authSchema = new mongoose.Schema(
       default: null
     },
 
+    /* ================= EMAIL VERIFICATION ================= */
+
+    email_verify_token_hash: {
+      type: String,
+      default: null,
+      index: true
+    },
+
+    email_verify_token_expires_at: {
+      type: Date,
+      default: null
+    },
+
     /* ================= PASSWORD RESET ================= */
 
     reset_token_hash: {

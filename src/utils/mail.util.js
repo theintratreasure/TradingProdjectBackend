@@ -61,23 +61,22 @@ function sendMail({ to, subject, html }) {
   });
 }
 
-/* ======================================================
-   OTP MAIL
-====================================================== */
 
-export function sendOtpMail(email, otp) {
-  const html = loadTemplate('signup-otp.html', {
+
+export function sendEmailVerificationMail(email, verifyLink) {
+  const html = loadTemplate('email-verify.html', {
     APP_NAME: process.env.APP_NAME || 'Trading App',
-    OTP: otp,
+    VERIFY_LINK: verifyLink,
     YEAR: new Date().getFullYear()
   });
 
   return sendMail({
     to: email,
-    subject: 'Verify your account',
+    subject: 'Confirm your email address',
     html
   });
 }
+
 
 /* ======================================================
    RESET PASSWORD MAIL

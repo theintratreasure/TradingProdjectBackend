@@ -10,5 +10,5 @@ router.use('/v1/health',healthRoutes);
 router.use('/v1/notification', notificationRoutes);
 router.use('/v1/payment-methods', paymentRoutes);
 router.use('/v1/auth', authRoutes);
-router.use('/inquiry', inquiryRoutes);
+router.use('/v1/inquiry', inquiryRoutes);
 export default router;

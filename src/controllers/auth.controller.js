@@ -1,11 +1,12 @@
 import {
   signupService,
-  verifyOtpService,
   loginService,
   forgotPasswordService,
   resetPasswordService,
   refreshTokenService,
-  logoutService
+  logoutService,
+  verifyEmailService,
+  resendEmailVerificationService
 } from '../services/auth.service.js';
 
 /* ================= SIGNUP ================= */
@@ -34,18 +35,54 @@ export async function signup(req, res) {
   }
 }
 
-/* ================= VERIFY OTP ================= */
+/* ================= VERIFY EMAIL ================= */
 
-export async function verifyOtp(req, res) {
+export async function verifyEmail(req, res) {
   try {
-    const data = await verifyOtpService(req.body);
+    const { token } = req.body;
 
-    res.json({
+    if (!token) {
+      return res.status(400).json({
+        success: false,
+        message: 'Verification token is required'
+      });
+    }
+
+    const data = await verifyEmailService(token);
+
+    return res.json({
       success: true,
       data
     });
   } catch (e) {
-    res.status(400).json({
+    return res.status(400).json({
+      success: false,
+      message: e.message
+    });
+  }
+}
+
+/* ================= RESEND EMAIL VERIFICATION ================= */
+
+export async function resendVerifyEmail(req, res) {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email is required'
+      });
+    }
+
+    const data = await resendEmailVerificationService(email);
+
+    return res.json({
+      success: true,
+      data
+    });
+  } catch (e) {
+    return res.status(400).json({
       success: false,
       message: e.message
     });

@@ -4,6 +4,7 @@ import {
   getInquiries
 } from '../../controllers/inquiry.controller.js';
 import { adminAuth } from '../../middlewares/adminAuth.middleware.js';
+import { authMiddleware } from '../../middlewares/auth.middleware.js';
 
 const router = express.Router();
 
@@ -15,6 +16,6 @@ router.post('/', createInquiry);
 /**
  * ADMIN
  */
-router.get('/', adminAuth, getInquiries);
+router.get('/', authMiddleware,adminAuth, getInquiries);
 
 export default router;

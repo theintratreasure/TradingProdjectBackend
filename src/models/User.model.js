@@ -31,10 +31,9 @@ const userSchema = new mongoose.Schema(
       index: true
     },
 
-    status: {
-      type: String,
-      enum: ['PENDING', 'ACTIVE', 'BLOCKED'],
-      default: 'PENDING',
+    isMailVerified: {
+      type: Boolean,
+      default: false,
       index: true
     },
 
@@ -43,6 +42,14 @@ const userSchema = new mongoose.Schema(
       default: null,
       index: true
     },
+
+    // ✅ KYC STATUS (only addition)
+    kycStatus: {
+      type: String,
+      enum: ['NOT_STARTED', 'PENDING', 'VERIFIED', 'REJECTED'],
+      default: 'NOT_STARTED',
+      index: true
+    }
   },
   {
     timestamps: true

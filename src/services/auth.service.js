@@ -4,38 +4,55 @@ import Referral from '../models/Referral.model.js';
 import Account from '../models/Account.model.js';
 import Otp from '../models/Otp.model.js';
 import {hashPassword,comparePassword,randomToken,sha256} from '../utils/hash.util.js';
-import { generateOtp } from '../utils/otp.util.js';
-import { sendOtpMail, sendResetPasswordMail} from '../utils/mail.util.js';
+import {  sendEmailVerificationMail, sendResetPasswordMail} from '../utils/mail.util.js';
 import { generateReferralCode } from '../utils/referralCode.util.js';
 import { signAccessToken } from '../utils/jwt.util.js';
 import UserDevice from '../models/UserDevice.model.js'
 import admin from '../config/firebase.js'
+import UserProfile from '../models/UserProfile.model.js';
 /* ======================================================
    SIGNUP
 ====================================================== */
 
 export async function signupService({
-  email, phone, name, password, confirmPassword, signup_ip, referral_code}) {
+  email,
+  phone,
+  name,
+  password,
+  confirmPassword,
+  signup_ip,
+  referral_code
+}) {
   if (!password || password !== confirmPassword) {
     throw new Error('Password and confirm password do not match');
   }
 
   try {
+    // 1️⃣ Create user
     const user = await User.create({
-      email,
+      email: email.toLowerCase(),
       phone,
       name,
       signup_ip,
-      status: 'PENDING',
-      userType: 'USER'
+      userType: 'USER',
+      isMailVerified: false
     });
 
+    // 2️⃣ Auth (password)
     const passwordHash = await hashPassword(password);
+
+    const token = randomToken();
+
     await Auth.create({
       user_id: user._id,
-      password_hash: passwordHash
+      password_hash: passwordHash,
+      email_verify_token_hash: sha256(token),
+      email_verify_token_expires_at: new Date(
+        Date.now() + 24 * 60 * 60 * 1000 // 24 hours
+      )
     });
 
+    // 3️⃣ Referral
     let referredBy = null;
     if (referral_code) {
       const parent = await Referral.findOne(
@@ -52,68 +69,96 @@ export async function signupService({
       status: 'PENDING'
     });
 
-    const otp = generateOtp();
-    await Otp.create({
-      user_id: user._id,
-      otp,
-      expires_at: new Date(Date.now() + 10 * 60 * 1000)
-    });
-
-    sendOtpMail(email, otp).catch(() => {});
+    // 4️⃣ Send email confirmation link
+    sendEmailVerificationMail(
+      user.email,
+      `${process.env.FRONTEND_URL}/verify-email?token=${token}`
+    ).catch(() => {});
 
     return {
       user_id: user._id,
-      message: 'Signup successful, OTP sent'
+      message: 'Signup successful, confirmation email sent'
     };
+
   } catch (err) {
-    if (err?.code === 11000) {
+    if (err && err.code === 11000) {
       throw new Error('Email or phone already exists');
     }
     throw err;
   }
 }
 
+
 /* ======================================================
-   VERIFY OTP
+  verify Email
 ====================================================== */
+export async function verifyEmailService(token) {
+  // 1️⃣ Find auth by valid token
+  const auth = await Auth.findOne({
+    email_verify_token_hash: sha256(token),
+    email_verify_token_expires_at: { $gt: new Date() }
+  });
 
-export async function verifyOtpService({ email, otp }) {
-  const user = await User.findOne(
-    { email },
-    { _id: 1, status: 1 }
-  );
-  if (!user) throw new Error('User not found');
+  if (!auth) {
+    throw new Error('Invalid or expired verification link');
+  }
 
-  const otpDoc = await Otp.findOne({
-    user_id: user._id,
-    otp,
-    used: false
-  }).sort({ createdAt: -1 });
-
-  if (!otpDoc) throw new Error('Invalid OTP');
-  if (otpDoc.expires_at < new Date()) throw new Error('OTP expired');
-
-  Otp.updateOne(
-    { _id: otpDoc._id },
-    { $set: { used: true } }
-  ).catch(() => {});
-
+  // 2️⃣ Activate user + mark email verified
   await User.updateOne(
-    { _id: user._id },
-    { $set: { status: 'ACTIVE' } }
+    { _id: auth.user_id },
+    {
+      $set: {
+        status: 'ACTIVE',
+        isMailVerified: true
+      }
+    }
   );
 
+  // 3️⃣ Clear token (important)
+  await Auth.updateOne(
+    { _id: auth._id },
+    {
+      $unset: {
+        email_verify_token_hash: 1,
+        email_verify_token_expires_at: 1
+      }
+    }
+  );
+
+  // 4️⃣ Create DEMO account (non-blocking)
   Account.create({
-    user_id: user._id,
+    user_id: auth.user_id,
     type: 'DEMO',
     balance: 10000
   }).catch(() => {});
 
+  // 5️⃣ Create UserProfile if not exists (AFTER confirm)
+  const profileExists = await UserProfile.findOne(
+    { user_id: auth.user_id },
+    { _id: 1 }
+  ).lean();
+
+  if (!profileExists) {
+    UserProfile.create({
+      user_id: auth.user_id,
+      date_of_birth: null,
+      gender: null,
+      address_line_1: '',
+      address_line_2: '',
+      city: '',
+      state: '',
+      country: '',
+      pincode: ''
+    }).catch(() => {});
+  }
+
   return {
-    user_id: user._id,
-    message: 'Account verified successfully'
+    user_id: auth.user_id,
+    message: 'Email verified successfully'
   };
 }
+
+
 
 /* ======================================================
    LOGIN
@@ -229,6 +274,7 @@ export async function forgotPasswordService(email) {
       }
     }
   );
+console.log('FRONTEND_URL =>', process.env.FRONTEND_URL);
 
   sendResetPasswordMail(
     user.email,
@@ -316,4 +362,48 @@ export async function logoutService({ refreshToken }) {
   if (result.matchedCount === 0) {
     throw new Error('Invalid refresh token');
   }
+}
+/* ================= resend mail confirm================ */
+export async function resendEmailVerificationService(email) {
+  const user = await User.findOne(
+    { email: email.toLowerCase() },
+    { _id: 1, isMailVerified: 1 }
+  ).lean();
+
+  if (!user) {
+    throw new Error('User not found');
+  }
+
+  if (user.isMailVerified) {
+    throw new Error('Email already verified');
+  }
+
+  const auth = await Auth.findOne({ user_id: user._id });
+  if (!auth) {
+    throw new Error('Auth record not found');
+  }
+
+  const token = randomToken();
+
+  await Auth.updateOne(
+    { _id: auth._id },
+    {
+      $set: {
+        email_verify_token_hash: sha256(token),
+        email_verify_token_expires_at: new Date(
+          Date.now() + 24 * 60 * 60 * 1000
+        )
+      }
+    }
+  );
+
+  sendEmailVerificationMail(
+    email,
+    `${process.env.FRONTEND_URL}/verify-email?token=${token}`
+  ).catch(() => {});
+
+  return {
+    user_id: user._id,
+    message: 'Confirmation email resent'
+  };
 }
