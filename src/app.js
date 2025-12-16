@@ -6,11 +6,6 @@ const app = express();
 
 app.disable('x-powered-by');
 
-/**
- * CORS CONFIG
- * Frontend domain ko allow karo
- * credentials true rakha for future auth (cookies / headers)
- */
 app.use(
   cors({
     origin: [
@@ -22,9 +17,6 @@ app.use(
     credentials: true
   })
 );
-
-// Preflight support
-app.options('*', cors());
 
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: false }));
