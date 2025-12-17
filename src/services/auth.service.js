@@ -229,7 +229,7 @@ export async function loginService({
         );
 
         await admin.messaging().subscribeToTopic(
-          fcmToken,
+          [fcmToken],
           'all_users'
         );
       } catch (err) {}
