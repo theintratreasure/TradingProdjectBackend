@@ -32,9 +32,9 @@ export async function authMiddleware(req, res, next) {
       });
     }
 
-    // 🔥 FIX HERE
+    // 🔥 updated fields
     const user = await User.findById(decoded.uid)
-      .select('_id userType status')
+      .select('_id userType isMailVerified')
       .lean();
 
     if (!user) {
@@ -44,10 +44,11 @@ export async function authMiddleware(req, res, next) {
       });
     }
 
-    if (user.status !== 'ACTIVE') {
+    // ✅ mail verification check
+    if (!user.isMailVerified) {
       return res.status(403).json({
         success: false,
-        message: 'Account is not active'
+        message: 'Email not verified'
       });
     }
 

@@ -102,19 +102,24 @@ export async function login(req, res) {
       });
     }
 
-    const { accessToken, refreshToken } = await loginService({
+    const {
+      accessToken,
+      refreshToken,
+      role 
+    } = await loginService({
       email,
       password,
       ip: req.ip,
       device: req.headers['user-agent'] || null,
-      fcmToken // 🔔 optional
+      fcmToken
     });
 
     return res.json({
       success: true,
       data: {
         accessToken,
-        refreshToken
+        refreshToken,
+        role
       }
     });
   } catch (e) {
@@ -124,6 +129,7 @@ export async function login(req, res) {
     });
   }
 }
+
 
 
 /* ================= FORGOT PASSWORD ================= */

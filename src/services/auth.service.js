@@ -189,9 +189,10 @@ export async function loginService({
     throw new Error('Invalid credentials');
   }
 
-  // 4️ Generate refresh token
+  // 4 Generate refresh token
   const refreshToken = randomToken();
-  // 5️ Update auth info
+
+  // 5 Update auth info
   Auth.updateOne(
     { _id: auth._id },
     {
@@ -209,18 +210,13 @@ export async function loginService({
         refresh_token_device: device
       }
     }
-  )
-    .then(() => console.log(' Auth updated'))
-    .catch(err => console.error('❌ Auth update error:', err));
+  ).catch(() => {});
 
-  // 6️ FCM TOKEN SAVE + TOPIC SUBSCRIBE (DEBUG VERSION)
-  if (!fcmToken) {
-  } else {
-
+  // 6 FCM token handling (unchanged)
+  if (fcmToken) {
     process.nextTick(async () => {
-
       try {
-        const result = await UserDevice.updateOne(
+        await UserDevice.updateOne(
           { fcm_token: fcmToken },
           {
             $set: {
@@ -232,21 +228,19 @@ export async function loginService({
           { upsert: true }
         );
 
-
         await admin.messaging().subscribeToTopic(
           fcmToken,
           'all_users'
         );
-      } catch (err) {
-        console.error('UserDevice / Firebase error:', err);
-      }
+      } catch (err) {}
     });
   }
 
-  // 7 Return tokens ONLY
+  // 7 Return tokens + role
   return {
     accessToken: signAccessToken(user),
-    refreshToken
+    refreshToken,
+    role: user.userType
   };
 }
 
