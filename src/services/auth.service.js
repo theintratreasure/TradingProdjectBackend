@@ -242,7 +242,8 @@ export async function loginService({
     return {
         accessToken: signAccessToken(user),
         refreshToken,
-        role: user.userType
+        role: user.userType,
+        isMailVerified: user.isMailVerified,
     };
 }
 

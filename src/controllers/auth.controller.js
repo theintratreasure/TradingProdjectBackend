@@ -105,7 +105,8 @@ export async function login(req, res) {
     const {
       accessToken,
       refreshToken,
-      role 
+      role,
+      isMailVerified 
     } = await loginService({
       email,
       password,
@@ -119,7 +120,8 @@ export async function login(req, res) {
       data: {
         accessToken,
         refreshToken,
-        role
+        role,
+        isMailVerified,
       }
     });
   } catch (e) {
