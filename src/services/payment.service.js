@@ -16,13 +16,19 @@ export async function createPaymentMethodService(userId, body) {
   const payload = {
     type,
     title: body.title,
-    image_url: body.image_url,
+    image_url: body.image_url || '',
+    image_public_id: body.image_public_id || '',
     created_by: userId,
     is_active: true
   };
 
   if (type === 'BANK') {
-    if (!body.bank_name || !body.account_name || !body.account_number || !body.ifsc) {
+    if (
+      !body.bank_name ||
+      !body.account_name ||
+      !body.account_number ||
+      !body.ifsc
+    ) {
       const err = new Error('Bank details are required');
       err.code = 'INVALID_INPUT';
       throw err;
@@ -57,6 +63,7 @@ export async function createPaymentMethodService(userId, body) {
 
   return PaymentMethod.create(payload);
 }
+
 
 /**
  * UPDATE PAYMENT METHOD

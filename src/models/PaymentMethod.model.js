@@ -27,7 +27,17 @@ const paymentMethodSchema = new mongoose.Schema(
     crypto_network: String,
     crypto_address: String,
 
-    image_url: String,
+    // IMAGE (Cloudinary)
+    image_url: {
+      type: String,
+      default: ''
+    },
+
+    image_public_id: {
+      type: String,
+      default: '',
+      index: true
+    },
 
     is_active: {
       type: Boolean,
