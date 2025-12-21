@@ -1,6 +1,6 @@
 import KycModel from '../models/Kyc.model.js';
 import UserModel from '../models/User.model.js';
-
+import cloudinary from '../config/cloudinary.js';
 /* ===============================
    SUBMIT KYC
 ================================ */
@@ -10,6 +10,10 @@ export async function submitKycService(userId, payload) {
 
   if (user.kycStatus === 'PENDING') {
     throw new Error('KYC already under review');
+  }
+
+  if (user.kycStatus === 'VERIFIED') {
+    throw new Error('KYC already verified');
   }
 
   if (
@@ -23,14 +27,43 @@ export async function submitKycService(userId, payload) {
     throw new Error('Front image and selfie are mandatory');
   }
 
-  // delete old KYC (for resubmission)
+  const oldKyc = await KycModel.findOne({ user: userId });
+
+  /* ===== REJECTED CASE: DELETE OLD CLOUDINARY FILES ===== */
+  if (oldKyc && oldKyc.status === 'REJECTED') {
+    const publicIds = [];
+
+    if (oldKyc.documents.front?.image_public_id) {
+      publicIds.push(oldKyc.documents.front.image_public_id);
+    }
+
+    if (oldKyc.documents.back?.image_public_id) {
+      publicIds.push(oldKyc.documents.back.image_public_id);
+    }
+
+    if (oldKyc.documents.selfie?.image_public_id) {
+      publicIds.push(oldKyc.documents.selfie.image_public_id);
+    }
+
+    if (publicIds.length > 0) {
+      try {
+        await cloudinary.api.delete_resources(publicIds);
+      } catch (error) {
+        console.error('Cloudinary delete error:', error.message);
+      }
+    }
+  }
+
+  /* ===== DELETE OLD KYC RECORD ===== */
   await KycModel.findOneAndDelete({ user: userId });
 
+  /* ===== CREATE NEW KYC ===== */
   const kyc = await KycModel.create({
     user: userId,
     documentType: payload.documentType,
     documents: payload.documents,
-    status: 'PENDING'
+    status: 'PENDING',
+    rejectionReason: ''
   });
 
   await UserModel.findByIdAndUpdate(userId, {
@@ -39,6 +72,7 @@ export async function submitKycService(userId, payload) {
 
   return kyc;
 }
+
 
 /* ===============================
    GET USER KYC

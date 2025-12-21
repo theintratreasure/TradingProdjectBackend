@@ -23,7 +23,7 @@ const kycSchema = new mongoose.Schema(
         image_public_id: { type: String, required: true }
       },
       back: {
-        image_url: { type: String, default: '' },
+        image_url: { type: String, default: '', required: true },
         image_public_id: { type: String, default: '' }
       },
       selfie: {
