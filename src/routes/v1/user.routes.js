@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getMyProfile } from '../../controllers/user.controller.js';
+import { getMyProfile, saveFcmToken } from '../../controllers/user.controller.js';
 import { authMiddleware } from '../../middlewares/auth.middleware.js';
 import { updateMyProfile } from '../../controllers/user.controller.js';
 const router = Router();
@@ -9,4 +9,5 @@ const router = Router();
  */
 router.get('/me', authMiddleware, getMyProfile);
 router.put('/me', authMiddleware, updateMyProfile);
+router.post("/save-fcm-token", authMiddleware, saveFcmToken);
 export default router;

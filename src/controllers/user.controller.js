@@ -1,3 +1,4 @@
+import UserDevice from '../models/UserDevice.model.js';
 import { getMyProfileService, updateMyProfileService } from '../services/user.service.js';
 
 export async function getMyProfile(req, res) {
@@ -50,3 +51,46 @@ export async function updateMyProfile(req, res) {
     });
   }
 }
+export async function saveFcmToken(req, res) {
+  try {
+    if (!req.user || !req.user._id) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized",
+      });
+    }
+
+    const userId = req.user._id;
+    const { token } = req.body;
+
+    if (!token) {
+      return res.status(400).json({
+        success: false,
+        message: "FCM token is required",
+      });
+    }
+
+    await UserDevice.findOneAndUpdate(
+      { fcm_token: token },   // 🔥 token unique hai, best filter
+      {
+        user_id: userId,      // ✅ schema ke according
+        fcm_token: token,
+        platform: "web",
+        last_used_at: new Date(), // ✅ schema ke according
+      },
+      { upsert: true, new: true }
+    );
+
+    return res.json({
+      success: true,
+      message: "FCM token saved",
+    });
+  } catch (err) {
+    console.error("Save FCM token error:", err);
+    return res.status(500).json({
+      success: false,
+      message: err.message || "Failed to save FCM token",
+    });
+  }
+}
+

@@ -52,13 +52,14 @@ export async function sendUserNotification({
   }
 
   const devices = await UserDevice.find(
-    { user: userId },
+    { user_id: userId },   // ✅ FIXED
     { fcm_token: 1, _id: 0 }
   ).lean();
 
   const tokens = devices.map(d => d.fcm_token).filter(Boolean);
 
   if (tokens.length === 0) {
+    console.log("⚠️ No FCM tokens for user:", userId);
     return { success: false, message: 'No active device tokens' };
   }
 
@@ -70,11 +71,11 @@ export async function sendUserNotification({
       ...(data || {})
     },
     webpush: {
-      headers: {
-        Urgency: 'high'
-      }
+      headers: { Urgency: 'high' }
     }
   });
+
+  console.log("✅ KYC notification sent:", response);
 
   return response;
 }
