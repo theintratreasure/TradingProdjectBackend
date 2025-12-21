@@ -11,6 +11,7 @@ app.use(
     origin: [
       'http://localhost:3000',
       'https://trade-portal-uiub.vercel.app',
+      'https://admin-dashboard-wheat-pi-59.vercel.app',
       'http://localhost:5173'
     ],
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
