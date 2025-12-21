@@ -1,6 +1,7 @@
 import KycModel from '../models/Kyc.model.js';
 import UserModel from '../models/User.model.js';
 import cloudinary from '../config/cloudinary.js';
+import { sendUserNotification } from './notification.service.js';
 /* ===============================
    SUBMIT KYC
 ================================ */
@@ -148,6 +149,33 @@ export async function updateKycStatusService(
   await UserModel.findByIdAndUpdate(kyc.user, {
     kycStatus: status
   });
+
+  /* ===== SEND NOTIFICATION USING EXISTING FUNCTION ===== */
+  if (status === 'VERIFIED') {
+    await sendUserNotification({
+      userId: kyc.user,
+      title: 'KYC Approved',
+      message: 'Your KYC has been approved successfully.',
+      data: {
+        type: 'KYC',
+        status: 'VERIFIED'
+      }
+    });
+  }
+
+  if (status === 'REJECTED') {
+    await sendUserNotification({
+      userId: kyc.user,
+      title: 'KYC Rejected',
+      message:
+        rejectionReason ||
+        'Your KYC was rejected. Please re-submit your documents.',
+      data: {
+        type: 'KYC',
+        status: 'REJECTED'
+      }
+    });
+  }
 
   return kyc;
 }
