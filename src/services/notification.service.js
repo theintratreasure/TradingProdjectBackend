@@ -1,32 +1,63 @@
 import admin from '../config/firebase.js';
 import UserDevice from '../models/UserDevice.model.js';
+import PublicNotification from '../models/PublicNotification.model.js';
 // send all user notifications
 export async function broadcastNotification({
   title,
   message,
-  data
+  data,
+  expireAt
 }) {
-  if (!title || !message) {
-    throw new Error('title and message are required');
+  if (!title || !message || !expireAt) {
+    throw new Error('title, message and expireAt are required');
   }
 
-  // 🔥 All active FCM tokens
+  const expiryDate = new Date(expireAt);
+
+  if (Number.isNaN(expiryDate.getTime())) {
+    throw new Error('Invalid expireAt date');
+  }
+
+  if (expiryDate <= new Date()) {
+    throw new Error('expireAt must be a future date');
+  }
+
+  // 1 SAVE IN DB (SOURCE OF TRUTH)
+  const notification = await PublicNotification.create({
+    title,
+    message,
+    data: data || {},
+    expireAt: expiryDate
+  });
+
+  // 2️ GET ALL FCM TOKENS
   const devices = await UserDevice.find(
-    { platform: 'web' },
+    {
+      platform: 'web',
+      fcm_token: { $exists: true, $ne: '' }
+    },
     { fcm_token: 1, _id: 0 }
   ).lean();
 
-  const tokens = devices.map(d => d.fcm_token).filter(Boolean);
+  const tokens = devices.map(d => d.fcm_token);
 
   if (tokens.length === 0) {
-    throw new Error('No active FCM tokens found');
+    return {
+      saved: true,
+      pushed: false,
+      reason: 'No active FCM tokens'
+    };
   }
 
+  // 3️ FIREBASE BROADCAST
   const response = await admin.messaging().sendEachForMulticast({
     tokens,
-    data: {
+    notification: {
       title,
-      body: message,
+      body: message
+    },
+    data: {
+      notificationId: String(notification._id),
       ...(data || {})
     },
     webpush: {
@@ -36,9 +67,11 @@ export async function broadcastNotification({
     }
   });
 
-  console.log('✅ FCM SENT:', response);
-
-  return response;
+  return {
+    saved: true,
+    pushed: true,
+    fcm: response
+  };
 }
 // send a single notification to a specific token/usr
 export async function sendUserNotification({

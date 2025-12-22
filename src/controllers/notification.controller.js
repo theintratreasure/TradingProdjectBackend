@@ -2,25 +2,44 @@ import { broadcastNotification } from '../services/notification.service.js';
 
 export async function adminBroadcastNotification(req, res) {
   try {
-    const { title, message, data } = req.body;
+    const { title, message, data, expireAt } = req.body;
 
-    if (!title || !message) {
+    // 1 Basic validation
+    if (!title || !message || !expireAt) {
       return res.status(400).json({
         success: false,
-        message: 'title and message are required'
+        message: 'title, message and expireAt are required'
       });
     }
 
+    const expiryDate = new Date(expireAt);
+
+    if (Number.isNaN(expiryDate.getTime())) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid expireAt date'
+      });
+    }
+
+    if (expiryDate <= new Date()) {
+      return res.status(400).json({
+        success: false,
+        message: 'expireAt must be a future date'
+      });
+    }
+
+    // 2 Broadcast + DB save
     const result = await broadcastNotification({
       title,
       message,
-      data
+      data,
+      expireAt: expiryDate
     });
 
     return res.json({
       success: true,
       message: 'Notification sent to all users',
-      firebaseMessageId: result
+      result
     });
   } catch (err) {
     return res.status(500).json({
@@ -29,3 +48,4 @@ export async function adminBroadcastNotification(req, res) {
     });
   }
 }
+
