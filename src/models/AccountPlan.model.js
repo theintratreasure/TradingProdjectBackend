@@ -23,6 +23,11 @@ const AccountPlanSchema = new mongoose.Schema(
       default: 'Unlimited'
     },
 
+    max_leverage: {
+      type: Number,
+      default: 0 // 0 = unlimited, otherwise numeric limit
+    },
+
     minLotSize: {
       type: Number,
       default: 0.01
@@ -36,6 +41,27 @@ const AccountPlanSchema = new mongoose.Schema(
     guidance: {
       type: String,
       default: ''
+    },
+
+    is_demo_allowed: {
+      type: Boolean,
+      default: true
+    },
+
+    spread_type: {
+      type: String,
+      enum: ['FIXED', 'FLOATING'],
+      default: 'FLOATING'
+    },
+
+    commission_per_lot: {
+      type: Number,
+      default: 0
+    },
+
+    swap_enabled: {
+      type: Boolean,
+      default: true
     },
 
     isActive: {

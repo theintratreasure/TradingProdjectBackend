@@ -1,41 +1,83 @@
-import mongoose from 'mongoose';
+import mongoose from "mongoose";
 
-const accountSchema = new mongoose.Schema(
+const AccountSchema = new mongoose.Schema(
   {
     user_id: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
+      ref: "User",
       required: true,
       index: true
     },
 
-    type: {
+    account_plan_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "AccountPlan",
+      required: true,
+      index: true
+    },
+
+    account_number: {
       type: String,
-      enum: ['DEMO', 'REAL'],
-      required: true
+      required: true,
+      unique: true,
+      index: true
+    },
+
+    account_type: {
+      type: String,
+      enum: ["demo", "live"],
+      required: true,
+      index: true
     },
 
     balance: {
       type: Number,
+      required: true,
       default: 0
+    },
+
+    equity: {
+      type: Number,
+      required: true,
+      default: 0
+    },
+
+    leverage: {
+      type: Number,
+      required: true
     },
 
     currency: {
       type: String,
-      default: 'USD'
+      required: true
     },
 
-    is_active: {
+    spread_type: {
+      type: String,
+      enum: ['FIXED', 'FLOATING'],
+      required: true
+    },
+
+    commission_per_lot: {
+      type: Number,
+      default: 0
+    },
+
+    swap_enabled: {
       type: Boolean,
       default: true
+    },
+
+    status: {
+      type: String,
+      enum: ["active", "disabled"],
+      default: "active",
+      index: true
     }
   },
-  {
-    timestamps: true
-  }
+  { timestamps: true }
 );
 
-// one demo + one real max
-accountSchema.index({ user_id: 1, type: 1 }, { unique: true });
+AccountSchema.index({ user_id: 1, account_type: 1 });
 
-export default mongoose.model('Account', accountSchema);
+export default mongoose.model("Account", AccountSchema);
