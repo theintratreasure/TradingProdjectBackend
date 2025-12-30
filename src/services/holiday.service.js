@@ -7,15 +7,17 @@ export async function createHolidayService(data) {
 export async function getAllHolidaysService(page, limit) {
   const skip = (page - 1) * limit;
 
-  const data = await HolidayModel.find({ isActive: true })
+  const data = await HolidayModel.find({})
     .sort({ date: 1 })
     .skip(skip)
-    .limit(limit);
+    .limit(limit)
+    .lean();
 
-  const total = await HolidayModel.countDocuments({ isActive: true });
+  const total = await HolidayModel.countDocuments({});
 
   return { data, total };
 }
+
 
 export async function getHolidayByIdService(id) {
   return HolidayModel.findById(id);
