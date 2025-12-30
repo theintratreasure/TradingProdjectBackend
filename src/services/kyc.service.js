@@ -97,35 +97,36 @@ export async function getAdminKycListService({
   status,
   documentType
 }) {
-  const filter = {};
+  page = Math.max(Number(page) || 1, 1);
+  limit = Math.min(Number(limit) || 20, 100);
 
+  const filter = {};
   if (status) filter.status = status;
   if (documentType) filter.documentType = documentType;
 
   const skip = (page - 1) * limit;
 
-  const [data, total] = await Promise.all([
+  const [list, total] = await Promise.all([
     KycModel.find(filter)
-      .populate('user', 'name email phone kycStatus')
+      .populate("user", "name email phone")
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
       .lean(),
 
-    KycModel.countDocuments(filter)
+    KycModel.countDocuments(filter),
   ]);
 
   return {
-    data,
+    list,
     pagination: {
       page,
       limit,
       total,
-      totalPages: Math.ceil(total / limit)
-    }
+      totalPages: Math.ceil(total / limit),
+    },
   };
 }
-
 
 /* ===============================
    ADMIN – UPDATE STATUS

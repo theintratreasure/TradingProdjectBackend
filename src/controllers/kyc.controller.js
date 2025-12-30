@@ -4,7 +4,7 @@ import {
   updateKycStatusService,
   getAdminKycListService
 } from '../services/kyc.service.js';
-
+import Kyc from "../models/Kyc.model.js";
 /* USER */
 export async function submitKyc(req, res) {
   try {
@@ -32,27 +32,45 @@ export async function getMyKyc(req, res) {
 }
 
 /* ADMIN */
-export async function getAllKycs(req, res) {
+export const getAllKycs = async (req, res) => {
   try {
-    const result = await getAdminKycListService({
-      page: Number(req.query.page || 1),
-      limit: Number(req.query.limit || 10),
-      status: req.query.status,
-      documentType: req.query.documentType
-    });
+    const { status, page = 1, limit = 10 } = req.query;
+
+    const query = {};
+    if (status) query.status = status;
+
+    const skip = (page - 1) * limit;
+
+    const [list, total] = await Promise.all([
+      Kyc.find(query)
+        .populate("user", "name email phone")
+        .sort({ createdAt: -1 })
+        .skip(Number(skip))
+        .limit(Number(limit))
+        .lean(),
+
+      Kyc.countDocuments(query),
+    ]);
 
     res.json({
       success: true,
-      ...result
+      data: {
+        list,
+        pagination: {
+          page: Number(page),
+          limit: Number(limit),
+          total,
+          totalPages: Math.ceil(total / limit),
+        },
+      },
     });
   } catch (err) {
     res.status(500).json({
       success: false,
-      message: err.message
+      message: err.message,
     });
   }
-}
-
+};
 
 export async function updateKycStatus(req, res) {
   try {
