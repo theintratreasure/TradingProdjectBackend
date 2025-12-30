@@ -1,22 +1,19 @@
 import AccountPlan from '../models/AccountPlan.model.js';
+import redis from '../config/redis.js';
 
 /**
- * In-memory cache (VERY FAST)
- * Auto-invalidated on create / update / delete
+ * Redis cache config
  */
-let activePlansCache = null;
-let cacheTime = 0;
-
-const CACHE_TTL = 5000; // 5 seconds
+const CACHE_KEY = 'account_plans_active';
+const CACHE_TTL = 60; // ⬅️ testing ke liye 60 sec (5 sec bahut kam hai)
 
 /* ================= CREATE ================= */
 
 export async function createPlan(data) {
   const plan = await AccountPlan.create(data);
 
-  // reset cache
-  activePlansCache = null;
-  cacheTime = 0;
+  // invalidate redis cache
+  await redis.del(CACHE_KEY);
 
   return plan;
 }
@@ -36,9 +33,8 @@ export async function updatePlan(id, data) {
     throw err;
   }
 
-  // reset cache
-  activePlansCache = null;
-  cacheTime = 0;
+  // invalidate redis cache
+  await redis.del(CACHE_KEY);
 
   return plan;
 }
@@ -54,9 +50,8 @@ export async function deletePlan(id) {
     throw err;
   }
 
-  // reset cache
-  activePlansCache = null;
-  cacheTime = 0;
+  // invalidate redis cache
+  await redis.del(CACHE_KEY);
 }
 
 /* ================= ADMIN ================= */
@@ -68,20 +63,43 @@ export async function getAllPlansAdmin() {
 /* ================= USER ================= */
 
 export async function getActivePlans() {
-  const now = Date.now();
+  const start = process.hrtime.bigint();
 
-  // return cache if valid
-  if (activePlansCache && now - cacheTime < CACHE_TTL) {
-    return activePlansCache;
+  // 1️⃣ Redis GET
+  const cached = await redis.get(CACHE_KEY);
+
+  if (cached) {
+    const end = process.hrtime.bigint();
+    console.log(
+      'REDIS HIT |',
+      Number(end - start) / 1_000_000,
+      'ms'
+    );
+
+    return JSON.parse(cached);
   }
 
+  console.log('REDIS MISS');
+
+  // 2️⃣ MongoDB query
   const plans = await AccountPlan.find({ isActive: true })
     .sort({ createdAt: -1 })
     .lean();
 
-  // update cache
-  activePlansCache = plans;
-  cacheTime = now;
+  // 3️⃣ Redis SET
+  await redis.set(
+    CACHE_KEY,
+    JSON.stringify(plans),
+    'EX',
+    CACHE_TTL
+  );
+
+  const end = process.hrtime.bigint();
+  console.log(
+    'DB + REDIS SET |',
+    Number(end - start) / 1_000_000,
+    'ms'
+  );
 
   return plans;
 }

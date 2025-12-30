@@ -1,9 +1,23 @@
 import mongoose from 'mongoose';
 import PaymentMethod from '../models/PaymentMethod.model.js';
+import cloudinary from '../config/cloudinary.js';
+import redis from '../config/redis.js';
 
-/**
- * CREATE PAYMENT METHOD
- */
+/* =======================
+   REDIS KEYS
+======================= */
+const ACTIVE_CACHE_KEY = 'payment_methods:active';
+const ALL_CACHE_KEY = 'payment_methods:all';
+const CACHE_TTL = 60; // seconds
+
+const clearPaymentMethodCache = async () => {
+  await redis.del(ACTIVE_CACHE_KEY);
+  await redis.del(ALL_CACHE_KEY);
+};
+
+/* =======================
+   CREATE PAYMENT METHOD
+======================= */
 export async function createPaymentMethodService(userId, body) {
   const { type } = body;
 
@@ -46,7 +60,6 @@ export async function createPaymentMethodService(userId, body) {
       err.code = 'INVALID_INPUT';
       throw err;
     }
-
     payload.upi_id = body.upi_id;
   }
 
@@ -56,23 +69,50 @@ export async function createPaymentMethodService(userId, body) {
       err.code = 'INVALID_INPUT';
       throw err;
     }
-
     payload.crypto_network = body.crypto_network;
     payload.crypto_address = body.crypto_address;
   }
 
-  return PaymentMethod.create(payload);
+  const created = await PaymentMethod.create(payload);
+  await clearPaymentMethodCache();
+
+  return created;
 }
 
-
-/**
- * UPDATE PAYMENT METHOD
- */
+/* =======================
+   UPDATE PAYMENT METHOD
+======================= */
 export async function updatePaymentMethodService(id, body) {
   if (!mongoose.Types.ObjectId.isValid(id)) {
     const err = new Error('Invalid payment method id');
     err.code = 'INVALID_ID';
     throw err;
+  }
+
+  const existing = await PaymentMethod.findById(id).lean();
+  if (!existing) {
+    const err = new Error('Payment method not found');
+    err.code = 'NOT_FOUND';
+    throw err;
+  }
+
+  const newImagePublicId =
+    typeof body.image_public_id === 'string' && body.image_public_id.length > 0
+      ? body.image_public_id
+      : '';
+
+  if (
+    newImagePublicId &&
+    existing.image_public_id &&
+    existing.image_public_id !== newImagePublicId
+  ) {
+    try {
+      await cloudinary.uploader.destroy(existing.image_public_id);
+    } catch {
+      const err = new Error('Failed to delete old payment image');
+      err.code = 'CLOUDINARY_DELETE_FAILED';
+      throw err;
+    }
   }
 
   const updated = await PaymentMethod.findByIdAndUpdate(
@@ -81,18 +121,13 @@ export async function updatePaymentMethodService(id, body) {
     { new: true }
   ).lean();
 
-  if (!updated) {
-    const err = new Error('Payment method not found');
-    err.code = 'NOT_FOUND';
-    throw err;
-  }
-
+  await clearPaymentMethodCache();
   return updated;
 }
 
-/**
- * DELETE PAYMENT METHOD
- */
+/* =======================
+   DELETE PAYMENT METHOD
+======================= */
 export async function deletePaymentMethodService(id) {
   if (!mongoose.Types.ObjectId.isValid(id)) {
     const err = new Error('Invalid payment method id');
@@ -100,20 +135,32 @@ export async function deletePaymentMethodService(id) {
     throw err;
   }
 
-  const deleted = await PaymentMethod.findByIdAndDelete(id);
-
-  if (!deleted) {
+  const paymentMethod = await PaymentMethod.findById(id).lean();
+  if (!paymentMethod) {
     const err = new Error('Payment method not found');
     err.code = 'NOT_FOUND';
     throw err;
   }
 
+  if (paymentMethod.image_public_id) {
+    try {
+      await cloudinary.uploader.destroy(paymentMethod.image_public_id);
+    } catch {
+      const err = new Error('Failed to delete payment image');
+      err.code = 'CLOUDINARY_DELETE_FAILED';
+      throw err;
+    }
+  }
+
+  await PaymentMethod.deleteOne({ _id: id });
+  await clearPaymentMethodCache();
+
   return true;
 }
 
-/**
- * TOGGLE ACTIVE / INACTIVE
- */
+/* =======================
+   TOGGLE ACTIVE / INACTIVE
+======================= */
 export async function togglePaymentMethodService(id, isActive) {
   if (!mongoose.Types.ObjectId.isValid(id)) {
     const err = new Error('Invalid payment method id');
@@ -121,35 +168,70 @@ export async function togglePaymentMethodService(id, isActive) {
     throw err;
   }
 
-  const updated = await PaymentMethod.findByIdAndUpdate(
-    id,
-    { $set: { is_active: Boolean(isActive) } },
-    { new: true }
-  ).lean();
-
-  if (!updated) {
+  const existing = await PaymentMethod.findById(id).lean();
+  if (!existing) {
     const err = new Error('Payment method not found');
     err.code = 'NOT_FOUND';
     throw err;
   }
 
+  const activate = Boolean(isActive);
+
+  if (activate && (existing.type === 'BANK' || existing.type === 'UPI')) {
+    await PaymentMethod.updateMany(
+      { _id: { $ne: existing._id }, type: existing.type, is_active: true },
+      { $set: { is_active: false } }
+    );
+  }
+
+  const updated = await PaymentMethod.findByIdAndUpdate(
+    id,
+    { $set: { is_active: activate } },
+    { new: true }
+  ).lean();
+
+  await clearPaymentMethodCache();
   return updated;
 }
 
-/**
- * USER → ONLY ACTIVE
- */
+/* =======================
+   USER → ONLY ACTIVE
+======================= */
 export async function getActivePaymentMethodsService() {
-  return PaymentMethod.find({ is_active: true })
-    .sort({ createdAt: -1 })
-    .lean();
-}
+  try {
+    const cached = await redis.get(ACTIVE_CACHE_KEY);
+    if (cached) {
+      return cached;
+    }
+  } catch {
+    // redis unavailable, fallback to DB
+  }
 
-/**
- * ADMIN → ALL
- */
-export async function getAllPaymentMethodsService() {
-  return PaymentMethod.find({})
+  const data = await PaymentMethod.find({ is_active: true })
     .sort({ createdAt: -1 })
     .lean();
+
+  const payload = JSON.stringify(data);
+
+  try {
+    await redis.setex(ACTIVE_CACHE_KEY, CACHE_TTL, payload);
+  } catch {
+    // ignore redis failure
+  }
+
+  return payload;
+}
+/* =======================
+   ADMIN → ALL
+======================= */
+export async function getAllPaymentMethodsService() {
+  const cached = await redis.get(ALL_CACHE_KEY);
+  if (cached) return JSON.parse(cached);
+
+  const data = await PaymentMethod.find({})
+    .sort({ createdAt: -1 })
+    .lean();
+
+  await redis.setex(ALL_CACHE_KEY, CACHE_TTL, JSON.stringify(data));
+  return data;
 }

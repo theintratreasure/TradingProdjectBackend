@@ -212,13 +212,16 @@ export async function getAllPaymentMethods(req, res) {
  */
 export async function getActivePaymentMethods(req, res) {
   try {
-    const data = await getActivePaymentMethodsService();
+    const payload = await getActivePaymentMethodsService();
 
-    return res.json({
-      success: true,
-      data
-    });
-
+    return res
+      .type('json')
+      .send(
+        JSON.stringify({
+          success: true,
+          data: JSON.parse(payload)
+        })
+      );
   } catch {
     return res.status(500).json({
       success: false,
