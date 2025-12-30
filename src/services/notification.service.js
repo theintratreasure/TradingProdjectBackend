@@ -112,3 +112,26 @@ export async function sendUserNotification({
 
   return response;
 }
+export async function getUserNotificationsService(userId, limit = 20, page = 1) {
+  if (!userId) {
+    throw new Error('User not authenticated');
+  }
+
+  const now = new Date();
+  const skip = (page - 1) * limit;
+
+  const notifications = await PublicNotification.find({
+    isActive: true,
+    expireAt: { $gt: now },
+    $or: [
+      { user_id: userId }, // personal
+      { user_id: null }    // broadcast
+    ]
+  })
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(limit)
+    .lean();
+
+  return notifications;
+}

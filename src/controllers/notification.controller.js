@@ -1,5 +1,5 @@
 import { broadcastNotification } from '../services/notification.service.js';
-
+import { getUserNotificationsService } from '../services/notification.service.js';
 export async function adminBroadcastNotification(req, res) {
   try {
     const { title, message, data, expireAt } = req.body;
@@ -49,3 +49,26 @@ export async function adminBroadcastNotification(req, res) {
   }
 }
 
+export async function getMyNotifications(req, res) {
+  try {
+    const userId = req.user._id;
+    const limit = Number(req.query.limit) || 20;
+    const page = Number(req.query.page) || 1;
+
+    const notifications = await getUserNotificationsService(
+      userId,
+      limit,
+      page
+    );
+
+    return res.json({
+      success: true,
+      data: notifications
+    });
+  } catch (err) {
+    return res.status(400).json({
+      success: false,
+      message: err.message
+    });
+  }
+}

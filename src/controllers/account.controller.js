@@ -21,7 +21,7 @@ export async function createAccountController(req, res) {
       currency
     } = req.body;
 
-    if (!account_plan_id || !account_type || !leverage || !currency) {
+    if (!account_plan_id || !account_type ) {
       return res.status(400).json({
         success: false,
         message: 'Missing required fields'
@@ -32,8 +32,6 @@ export async function createAccountController(req, res) {
       userId: req.user._id,
       account_plan_id,
       account_type,
-      leverage,
-      currency
     });
 
     return res.status(201).json({

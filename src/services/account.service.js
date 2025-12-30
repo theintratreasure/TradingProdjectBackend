@@ -8,8 +8,6 @@ export async function createAccount({
   userId,
   account_plan_id,
   account_type,
-  leverage,
-  currency
 }) {
   if (!userId) {
     throw new Error('User not authenticated');
@@ -17,10 +15,6 @@ export async function createAccount({
 
   if (!['demo', 'live'].includes(account_type)) {
     throw new Error('Invalid account type');
-  }
-
-  if (!currency) {
-    throw new Error('Currency is required');
   }
 
   const plan = await AccountPlan.findOne({
@@ -60,19 +54,14 @@ export async function createAccount({
     }
   }
 
-  /* ================= LEVERAGE RULE ================= */
-  if (
-    typeof leverage !== 'number' ||
-    leverage <= 0
-  ) {
-    throw new Error('Invalid leverage value');
-  }
+  /* ================= LEVERAGE FROM PLAN ================= */
+  const leverage =
+    typeof plan.default_leverage === 'number' && plan.default_leverage > 0
+      ? plan.default_leverage
+      : plan.max_leverage;
 
-  if (
-    plan.max_leverage > 0 &&
-    leverage > plan.max_leverage
-  ) {
-    throw new Error('Leverage exceeds plan limit');
+  if (typeof leverage !== 'number' || leverage <= 0) {
+    throw new Error('Invalid leverage configuration in account plan');
   }
 
   /* ================= BALANCE ================= */
@@ -93,7 +82,7 @@ export async function createAccount({
     equity: balance,
 
     leverage,
-    currency,
+    currency: plan.currency || 'USD',
 
     spread_type: plan.spread_type,
     commission_per_lot: plan.commission_per_lot,
@@ -107,9 +96,11 @@ export async function createAccount({
     account_number: account.account_number,
     account_type: account.account_type,
     balance: account.balance,
-    currency: account.currency
+    currency: account.currency,
+    leverage: account.leverage
   };
 }
+
 
 
 export async function getUserAccounts(userId) {

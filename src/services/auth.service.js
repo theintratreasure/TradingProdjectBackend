@@ -95,70 +95,93 @@ export async function signupService({
   verify Email
 ====================================================== */
 export async function verifyEmailService(token) {
-    // 1️⃣ Find auth by valid token
-    const auth = await Auth.findOne({
-        email_verify_token_hash: sha256(token),
-        email_verify_token_expires_at: { $gt: new Date() }
-    });
+  // 1️⃣ Validate verification token
+  const auth = await Auth.findOne({
+    email_verify_token_hash: sha256(token),
+    email_verify_token_expires_at: { $gt: new Date() }
+  }).lean();
 
-    if (!auth) {
-        throw new Error('Invalid or expired verification link');
+  if (!auth) {
+    throw new Error('Invalid or expired verification link');
+  }
+
+  // 2️⃣ Activate user & mark email verified
+  await User.updateOne(
+    { _id: auth.user_id },
+    {
+      $set: {
+        status: 'ACTIVE',
+        isMailVerified: true
+      }
     }
+  );
 
-    // 2️⃣ Activate user + mark email verified
-    await User.updateOne(
-        { _id: auth.user_id },
-        {
-            $set: {
-                status: 'ACTIVE',
-                isMailVerified: true
-            }
-        }
-    );
-
-    // 3️⃣ Clear token (important)
-    await Auth.updateOne(
-        { _id: auth._id },
-        {
-            $unset: {
-                email_verify_token_hash: 1,
-                email_verify_token_expires_at: 1
-            }
-        }
-    );
-
-    // 4️⃣ Create DEMO account (non-blocking)
-    Account.create({
-        user_id: auth.user_id,
-        type: 'DEMO',
-        balance: 10000
-    }).catch(() => { });
-
-    // 5️⃣ Create UserProfile if not exists (AFTER confirm)
-    const profileExists = await UserProfile.findOne(
-        { user_id: auth.user_id },
-        { _id: 1 }
-    ).lean();
-
-    if (!profileExists) {
-        UserProfile.create({
-            user_id: auth.user_id,
-            date_of_birth: null,
-            gender: null,
-            address_line_1: '',
-            address_line_2: '',
-            city: '',
-            state: '',
-            country: '',
-            pincode: ''
-        }).catch(() => { });
+  // 3️⃣ Remove verification token
+  await Auth.updateOne(
+    { _id: auth._id },
+    {
+      $unset: {
+        email_verify_token_hash: 1,
+        email_verify_token_expires_at: 1
+      }
     }
+  );
 
-    return {
+  // 4️⃣ Auto-create DEMO account (non-blocking, DB-driven)
+  (async () => {
+    try {
+      const existingDemo = await Account.countDocuments({
         user_id: auth.user_id,
-        message: 'Email verified successfully'
-    };
+        account_type: 'demo'
+      });
+
+      if (existingDemo > 0) return;
+
+      const demoPlan = await AccountPlan.findOne({
+        isActive: true,
+        is_demo_allowed: true
+      })
+        .sort({ minDeposit: 1 })
+        .lean();
+
+      if (!demoPlan) return;
+
+      await createAccount({
+        userId: auth.user_id,
+        account_plan_id: demoPlan._id,
+        account_type: 'demo'
+      });
+    } catch {
+      // silent fail (email verification must not break)
+    }
+  })();
+
+  // 5️⃣ Create user profile if not exists
+  const profileExists = await UserProfile.findOne(
+    { user_id: auth.user_id },
+    { _id: 1 }
+  ).lean();
+
+  if (!profileExists) {
+    UserProfile.create({
+      user_id: auth.user_id,
+      date_of_birth: null,
+      gender: null,
+      address_line_1: '',
+      address_line_2: '',
+      city: '',
+      state: '',
+      country: '',
+      pincode: ''
+    }).catch(() => {});
+  }
+
+  return {
+    user_id: auth.user_id,
+    message: 'Email verified successfully'
+  };
 }
+
 
 
 
@@ -304,6 +327,9 @@ export async function resetPasswordService(token, newPassword) {
         }
     );
 }
+/* ======================================================
+   REFRESH TOKEN 
+====================================================== */
 export async function refreshTokenService({ refreshToken, ip, device }) {
     const auth = await Auth.findOne({
         refresh_token_hash: sha256(refreshToken),
