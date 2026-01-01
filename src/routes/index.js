@@ -11,6 +11,7 @@ import holidayRoutes from "./v1/holiday.routes.js";
 import accountPlanRoutes from "./v1/accountPlan.routes.js";
 import accountRoutes from "./v1/account.routes.js";
 import depositRoutes from "./v1/deposit.routes.js";
+import transactionRoutes from './v1/transaction.routes.js';
 const router = Router();
 
 router.use("/v1/health", healthRoutes);
@@ -24,4 +25,5 @@ router.use("/v1/notification", notificationRoutes);
 router.use("/v1/inquiry", inquiryRoutes);
 router.use("/v1/holidays", holidayRoutes);
 router.use("/v1/deposits", depositRoutes); 
+router.use('/v1/transactions', transactionRoutes);
 export default router;
