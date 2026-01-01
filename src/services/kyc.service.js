@@ -141,17 +141,33 @@ export async function updateKycStatusService(
   }
 
   const kyc = await KycModel.findById(kycId);
-  if (!kyc) throw new Error('KYC not found');
+  if (!kyc) {
+    throw new Error('KYC not found');
+  }
 
+  // 🔒 IMPORTANT: KYC can be updated ONLY if PENDING
+  if (kyc.status !== 'PENDING') {
+    throw new Error(
+      `KYC already ${kyc.status}. Status cannot be changed.`
+    );
+  }
+
+  // 🔒 REJECTION MUST HAVE A REASON
+  if (status === 'REJECTED' && !rejectionReason) {
+    throw new Error('Rejection reason is required');
+  }
+
+  // Update KYC
   kyc.status = status;
   kyc.rejectionReason = status === 'REJECTED' ? rejectionReason : '';
   await kyc.save();
 
+  // Sync user KYC status
   await UserModel.findByIdAndUpdate(kyc.user, {
     kycStatus: status
   });
 
-  /* ===== SEND NOTIFICATION USING EXISTING FUNCTION ===== */
+  /* ===== SEND NOTIFICATION ===== */
   if (status === 'VERIFIED') {
     await sendUserNotification({
       userId: kyc.user,
@@ -180,3 +196,4 @@ export async function updateKycStatusService(
 
   return kyc;
 }
+
