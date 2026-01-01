@@ -10,7 +10,7 @@ import kycRoutes from "./v1/kyc.routes.js";
 import holidayRoutes from "./v1/holiday.routes.js";
 import accountPlanRoutes from "./v1/accountPlan.routes.js";
 import accountRoutes from "./v1/account.routes.js";
-
+import depositRoutes from "./v1/deposit.routes.js";
 const router = Router();
 
 router.use("/v1/health", healthRoutes);
@@ -23,5 +23,5 @@ router.use("/v1/payment-methods", paymentRoutes);
 router.use("/v1/notification", notificationRoutes);
 router.use("/v1/inquiry", inquiryRoutes);
 router.use("/v1/holidays", holidayRoutes);
-
+router.use("/v1/deposits", depositRoutes); 
 export default router;

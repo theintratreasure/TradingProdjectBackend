@@ -54,7 +54,7 @@ const AccountSchema = new mongoose.Schema(
 
     spread_type: {
       type: String,
-      enum: ['FIXED', 'FLOATING'],
+      enum: ["FIXED", "FLOATING"],
       required: true
     },
 
@@ -66,6 +66,13 @@ const AccountSchema = new mongoose.Schema(
     swap_enabled: {
       type: Boolean,
       default: true
+    },
+
+    // 🔹 FIRST DEPOSIT FLAG
+    first_deposit: {
+      type: Boolean,
+      default: false,
+      index: true
     },
 
     status: {
