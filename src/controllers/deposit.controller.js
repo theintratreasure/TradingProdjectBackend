@@ -11,7 +11,7 @@ import {
 export async function createDeposit(req, res) {
   try {
     const deposit = await createDepositService({
-      userId: req.user.id,
+      userId: req.user._id,
       ...req.body,
       ipAddress: req.ip
     });
@@ -32,17 +32,37 @@ export async function createDeposit(req, res) {
 /* USER: GET OWN DEPOSITS */
 export async function getMyDeposits(req, res) {
   try {
-    const data = await getUserDepositsService(req.user.id);
-    return res.json({ success: true, data });
+    const {
+      page = 1,
+      limit = 10,
+      startDate,
+      endDate
+    } = req.query;
+
+    const result = await getUserDepositsService({
+      userId: req.user._id,
+      page: Number(page),
+      limit: Number(limit),
+      startDate,
+      endDate
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: result.data,
+      pagination: result.pagination
+    });
   } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
+    return res.status(500).json({
+      success: false,
+      message: err.message
+    });
   }
 }
-
 /* USER: CHECK STATUS */
 export async function getDepositStatus(req, res) {
   try {
-    const data = await getDepositStatusService(req.user.id, req.params.id);
+    const data = await getDepositStatusService(req.user._id, req.params.id);
     return res.json({ success: true, data });
   } catch (err) {
     return res.status(404).json({ success: false, message: err.message });
@@ -52,12 +72,36 @@ export async function getDepositStatus(req, res) {
 /* ADMIN: GET ALL */
 export async function adminGetAllDeposits(req, res) {
   try {
-    const data = await adminGetAllDepositsService();
-    return res.json({ success: true, data });
+    const page = Math.max(parseInt(req.query.page) || 1, 1);
+    const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+
+    const filters = {
+      status: req.query.status,
+      fromDate: req.query.fromDate,
+      toDate: req.query.toDate
+    };
+
+    const result = await adminGetAllDepositsService({
+      page,
+      limit,
+      filters
+    });
+
+    return res.json({
+      success: true,
+      page,
+      limit,
+      total: result.total,
+      data: result.records
+    });
   } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
+    return res.status(500).json({
+      success: false,
+      message: err.message
+    });
   }
 }
+
 
 /* ADMIN: APPROVE */
 export async function adminApproveDeposit(req, res) {

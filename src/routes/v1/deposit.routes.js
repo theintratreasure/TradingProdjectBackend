@@ -18,8 +18,8 @@ router.get('/my',authMiddleware , getMyDeposits);
 router.get('/:id/status', authMiddleware, getDepositStatus);
 
 /* ADMIN */
-router.get('/admin/all', authMiddleware,adminAuth, adminGetAllDeposits);
-router.post('/admin/:id/approve', authMiddleware,adminAuth, adminApproveDeposit);
-router.post('/admin/:id/reject', authMiddleware,adminAuth, adminRejectDeposit);
+router.get('/all', authMiddleware,adminAuth, adminGetAllDeposits);
+router.patch('/:id/approve', authMiddleware,adminAuth, adminApproveDeposit);
+router.patch('/:id/reject', authMiddleware,adminAuth, adminRejectDeposit);
 
 export default router;

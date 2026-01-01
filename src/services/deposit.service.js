@@ -1,8 +1,10 @@
 /* CREATE DEPOSIT */
+import mongoose from 'mongoose';
 import Deposit from '../models/Deposit.model.js';
 import Account from '../models/Account.model.js';
 import AccountPlan from '../models/AccountPlan.model.js';
 import DepositModel from '../models/Deposit.model.js';
+import Transaction from '../models/Transaction.model.js';
 
 export async function createDepositService({
   userId,
@@ -29,7 +31,7 @@ export async function createDepositService({
   }
 
   /* ---------------- ACCOUNT VALIDATION ---------------- */
-
+console.log("account",account,userId)
   const userAccount = await Account.findOne({
     _id: account,
     user_id: userId,
@@ -73,57 +75,210 @@ export async function createDepositService({
   return deposit;
 }
 
-/* USER DEPOSITS */
-export async function getUserDepositsService(userId) {
-  return DepositModel.find({ user: userId })
-    .sort({ createdAt: -1 })
-    .populate('account', 'accountNo environment');
+/**
+ * GET USER DEPOSITS (PAGINATED + DATE FILTER)
+ * - Optimized for large scale (150k+ users)
+ * - Uses lean(), projection, indexed fields
+ * - Supports date range filtering
+ */
+export async function getUserDepositsService({
+  userId,
+  page = 1,
+  limit = 10,
+  startDate,
+  endDate
+}) {
+  const safePage = Math.max(Number(page) || 1, 1);
+  const safeLimit = Math.min(Math.max(Number(limit) || 10, 1), 50);
+  const skip = (safePage - 1) * safeLimit;
+
+  /** BASE FILTER */
+  const filter = { user: userId };
+
+  /** DATE FILTER */
+  if (startDate || endDate) {
+    filter.createdAt = {};
+    if (startDate) filter.createdAt.$gte = new Date(startDate);
+    if (endDate) filter.createdAt.$lte = new Date(endDate);
+  }
+
+  /** PARALLEL QUERIES (FAST) */
+  const [data, total] = await Promise.all([
+    DepositModel.find(
+      filter,
+      {
+        amount: 1,
+        method: 1,
+        status: 1,
+        proof: 1,
+        rejectionReason: 1,
+        createdAt: 1,
+        actionAt: 1,
+        account: 1
+      }
+    )
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(safeLimit)
+      .populate('account', 'accountNo environment')
+      .lean(),
+
+    DepositModel.countDocuments(filter)
+  ]);
+
+  return {
+    data,
+    pagination: {
+      page: safePage,
+      limit: safeLimit,
+      total,
+      totalPages: Math.ceil(total / safeLimit)
+    }
+  };
 }
+
 
 /* USER STATUS CHECK */
 export async function getDepositStatusService(userId, depositId) {
-  const deposit = await Deposit.findOne({
-    _id: depositId,
-    user: userId
-  });
+  const deposit = await Deposit.findOne(
+    {
+      _id: depositId,
+      user: userId
+    },
+    {
+      // ✅ USER SAFE FIELDS ONLY
+      amount: 1,
+      method: 1,
+      status: 1,
+      rejectionReason: 1,
+      'proof.image_url': 1, // ✅ ONLY IMAGE URL (SAFE)
+      createdAt: 1,
+      actionAt: 1
+    }
+  ).lean(); // ✅ FAST
 
-  if (!deposit) throw new Error('Deposit not found');
+  if (!deposit) {
+    throw new Error('Deposit not found');
+  }
+
   return deposit;
 }
 
+
 /* ADMIN GET ALL */
-export async function adminGetAllDepositsService() {
-  return Deposit.find()
-    .sort({ createdAt: -1 })
-    .populate('user', 'email')
-    .populate('account', 'accountNo environment');
+export async function adminGetAllDepositsService({
+  page,
+  limit,
+  filters
+}) {
+  const query = {};
+
+  if (filters.status) {
+    query.status = filters.status;
+  }
+
+  if (filters.fromDate || filters.toDate) {
+    query.createdAt = {};
+    if (filters.fromDate) {
+      query.createdAt.$gte = new Date(filters.fromDate);
+    }
+    if (filters.toDate) {
+      query.createdAt.$lte = new Date(filters.toDate);
+    }
+  }
+
+  const skip = (page - 1) * limit;
+
+  const [records, total] = await Promise.all([
+    Deposit.find(query)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean(),
+
+    Deposit.countDocuments(query)
+  ]);
+
+  return { records, total };
 }
+
 
 /* ADMIN APPROVE */
 export async function approveDepositService(depositId, adminId) {
-  const deposit = await Deposit.findById(depositId);
-  if (!deposit) throw new Error('Deposit not found');
+  const session = await mongoose.startSession();
+  session.startTransaction();
 
-  if (deposit.status !== 'PENDING') {
-    throw new Error('Deposit already processed');
+  try {
+    // 1. Fetch pending deposit
+    const deposit = await Deposit.findOne({
+      _id: depositId,
+      status: 'PENDING'
+    }).session(session);
+
+    if (!deposit) {
+      throw new Error('Deposit not found or already processed');
+    }
+
+    // 2. Fetch account
+    const account = await Account.findById(deposit.account).session(session);
+    if (!account) {
+      throw new Error('Account not found');
+    }
+
+    // 3. Calculate new balance
+    const newBalance = account.balance + deposit.amount;
+
+    // 4. Update deposit status
+    deposit.status = 'APPROVED';
+    deposit.actionBy = adminId;
+    deposit.actionAt = new Date();
+    deposit.rejectionReason = '';
+    await deposit.save({ session });
+
+    // 5. Update account balance only (equity is runtime-calculated)
+    await Account.updateOne(
+      { _id: account._id },
+      {
+        $set: {
+          balance: newBalance,
+          first_deposit: true
+        }
+      },
+      { session }
+    );
+
+    // 6. Create transaction ledger entry
+    await Transaction.create(
+      [
+        {
+          user: deposit.user,
+          account: deposit.account,
+          type: 'DEPOSIT',
+          amount: deposit.amount,
+          balanceAfter: newBalance,
+          status: 'SUCCESS',
+          referenceType: 'DEPOSIT',
+          referenceId: deposit._id,
+          createdBy: adminId,
+          remark: 'Deposit approved'
+        }
+      ],
+      { session }
+    );
+
+    await session.commitTransaction();
+    session.endSession();
+
+    return {
+      success: true,
+      depositId: deposit._id,
+      balance: newBalance
+    };
+  } catch (err) {
+    await session.abortTransaction();
+    session.endSession();
+    throw err;
   }
-
-  deposit.status = 'APPROVED';
-  deposit.actionBy = adminId;
-  deposit.actionAt = new Date();
-  deposit.rejectionReason = '';
-
-  await deposit.save();
-
-  /* IMPORTANT:
-     Balance update should be atomic & separate
-     Example:
-     await Account.findByIdAndUpdate(deposit.account, {
-       $inc: { balance: deposit.amount }
-     });
-  */
-
-  return deposit;
 }
 
 /* ADMIN REJECT */
@@ -134,7 +289,7 @@ export async function rejectDepositService(depositId, adminId, reason) {
   if (!deposit) throw new Error('Deposit not found');
 
   if (deposit.status !== 'PENDING') {
-    throw new Error('Deposit already processed');
+    throw new Error('Action already processed by admin');
   }
 
   deposit.status = 'REJECTED';
