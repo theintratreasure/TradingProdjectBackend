@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 
 const AccountSchema = new mongoose.Schema(
   {
+    // 🔹 USER
     user_id: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -9,6 +10,7 @@ const AccountSchema = new mongoose.Schema(
       index: true
     },
 
+    // 🔹 PLAN REFERENCE (ADMIN / AUDIT)
     account_plan_id: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "AccountPlan",
@@ -16,6 +18,7 @@ const AccountSchema = new mongoose.Schema(
       index: true
     },
 
+    // 🔹 ACCOUNT IDENTIFICATION
     account_number: {
       type: String,
       required: true,
@@ -30,31 +33,26 @@ const AccountSchema = new mongoose.Schema(
       index: true
     },
 
-    balance: {
-      type: Number,
-      required: true,
-      default: 0
-    },
-
-    equity: {
-      type: Number,
-      required: true,
-      default: 0
+    // 🔹 PLAN SNAPSHOT (FAST READ – NO POPULATE)
+    plan_name: {
+      type: String,
+      required: true, // STANDARD / ECN / RAW etc
+      index: true
     },
 
     leverage: {
       type: Number,
-      required: true
-    },
-
-    currency: {
-      type: String,
-      required: true
+      required: true // snapshot from plan
     },
 
     spread_type: {
       type: String,
       enum: ["FIXED", "FLOATING"],
+      required: true
+    },
+
+    spread_pips: {
+      type: Number,
       required: true
     },
 
@@ -68,6 +66,22 @@ const AccountSchema = new mongoose.Schema(
       default: true
     },
 
+    // 🔹 FINANCIALS
+    balance: {
+      type: Number,
+      default: 0
+    },
+
+    equity: {
+      type: Number,
+      default: 0
+    },
+
+    currency: {
+      type: String,
+      required: true // USD / INR / EUR etc
+    },
+
     // 🔹 FIRST DEPOSIT FLAG
     first_deposit: {
       type: Boolean,
@@ -75,6 +89,7 @@ const AccountSchema = new mongoose.Schema(
       index: true
     },
 
+    // 🔹 STATUS
     status: {
       type: String,
       enum: ["active", "disabled"],
@@ -82,9 +97,14 @@ const AccountSchema = new mongoose.Schema(
       index: true
     }
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+    versionKey: false
+  }
 );
 
+// 🔹 COMPOSITE INDEXES
 AccountSchema.index({ user_id: 1, account_type: 1 });
+AccountSchema.index({ user_id: 1, status: 1 });
 
 export default mongoose.model("Account", AccountSchema);

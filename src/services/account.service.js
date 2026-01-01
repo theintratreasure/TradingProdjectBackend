@@ -7,7 +7,7 @@ const DEMO_DEFAULT_BALANCE = 10000;
 export async function createAccount({
   userId,
   account_plan_id,
-  account_type,
+  account_type
 }) {
   if (!userId) {
     throw new Error('User not authenticated');
@@ -17,6 +17,7 @@ export async function createAccount({
     throw new Error('Invalid account type');
   }
 
+  // 🔹 FETCH ACTIVE PLAN
   const plan = await AccountPlan.findOne({
     _id: account_plan_id,
     isActive: true
@@ -56,11 +57,11 @@ export async function createAccount({
 
   /* ================= LEVERAGE FROM PLAN ================= */
   const leverage =
-    typeof plan.default_leverage === 'number' && plan.default_leverage > 0
-      ? plan.default_leverage
-      : plan.max_leverage;
+    typeof plan.max_leverage === 'number' && plan.max_leverage > 0
+      ? plan.max_leverage
+      : 1;
 
-  if (typeof leverage !== 'number' || leverage <= 0) {
+  if (leverage <= 0) {
     throw new Error('Invalid leverage configuration in account plan');
   }
 
@@ -78,15 +79,18 @@ export async function createAccount({
     account_number: generateAccountNumber(),
     account_type,
 
-    balance,
-    equity: balance,
-
+    // 🔹 PLAN SNAPSHOT
+    plan_name: plan.name,
     leverage,
-    currency: plan.currency || 'USD',
-
     spread_type: plan.spread_type,
+    spread_pips: plan.spreadPips,
     commission_per_lot: plan.commission_per_lot,
     swap_enabled: plan.swap_enabled,
+
+    // 🔹 FINANCIALS
+    balance,
+    equity: balance,
+    currency: plan.currency || 'USD',
 
     status: 'active'
   });
@@ -95,37 +99,81 @@ export async function createAccount({
     id: account._id,
     account_number: account.account_number,
     account_type: account.account_type,
+    plan_name: account.plan_name,
     balance: account.balance,
     currency: account.currency,
     leverage: account.leverage
   };
 }
-
-
-
+// get user accounts
 export async function getUserAccounts(userId) {
+  if (!userId) {
+    throw new Error('User not authenticated');
+  }
+
   return Account.find(
     { user_id: userId },
     {
       account_number: 1,
       account_type: 1,
+
+      // 🔹 PLAN SNAPSHOT
+      plan_name: 1,
+      leverage: 1,
+      spread_type: 1,
+
+      // 🔹 FINANCIALS
       balance: 1,
       equity: 1,
       currency: 1,
+
       status: 1,
       createdAt: 1
     }
-  ).sort({ createdAt: -1 });
+  )
+    .sort({ createdAt: -1 })
+    .lean();
 }
 
+/**
+ * GET SINGLE ACCOUNT DETAIL
+ * SECURE: user-bound account fetch
+ */
 export async function getUserAccountDetail({ userId, accountId }) {
-  const account = await Account.findOne({
-    _id: accountId,
-    user_id: userId
-  });
+  if (!userId || !accountId) {
+    throw new Error('Invalid request');
+  }
+
+  const account = await Account.findOne(
+    {
+      _id: accountId,
+      user_id: userId
+    },
+    {
+      account_number: 1,
+      account_type: 1,
+
+      // 🔹 PLAN SNAPSHOT
+      plan_name: 1,
+      leverage: 1,
+      spread_type: 1,
+      spread_pips: 1,
+      commission_per_lot: 1,
+      swap_enabled: 1,
+
+      // 🔹 FINANCIALS
+      balance: 1,
+      equity: 1,
+      currency: 1,
+
+      status: 1,
+      first_deposit: 1,
+      createdAt: 1
+    }
+  ).lean();
 
   if (!account) {
-    const err = new Error("Account not found");
+    const err = new Error('Account not found');
     err.statusCode = 404;
     throw err;
   }

@@ -31,7 +31,6 @@ export async function createDepositService({
   }
 
   /* ---------------- ACCOUNT VALIDATION ---------------- */
-console.log("account",account,userId)
   const userAccount = await Account.findOne({
     _id: account,
     user_id: userId,
@@ -212,30 +211,35 @@ export async function approveDepositService(depositId, adminId) {
     // 1. Fetch pending deposit
     const deposit = await Deposit.findOne({
       _id: depositId,
-      status: 'PENDING'
+      status: "PENDING"
     }).session(session);
 
     if (!deposit) {
-      throw new Error('Deposit not found or already processed');
+      throw new Error("Deposit not found or already processed");
     }
 
     // 2. Fetch account
     const account = await Account.findById(deposit.account).session(session);
     if (!account) {
-      throw new Error('Account not found');
+      throw new Error("Account not found");
     }
 
-    // 3. Calculate new balance
+    // 3. LIVE account check (IMPORTANT)
+    if (account.account_type !== "live") {
+      throw new Error("Deposit is allowed only for LIVE accounts");
+    }
+
+    // 4. Calculate new balance
     const newBalance = account.balance + deposit.amount;
 
-    // 4. Update deposit status
-    deposit.status = 'APPROVED';
+    // 5. Update deposit status
+    deposit.status = "APPROVED";
     deposit.actionBy = adminId;
     deposit.actionAt = new Date();
-    deposit.rejectionReason = '';
+    deposit.rejectionReason = "";
     await deposit.save({ session });
 
-    // 5. Update account balance only (equity is runtime-calculated)
+    // 6. Update account balance + first deposit flag
     await Account.updateOne(
       { _id: account._id },
       {
@@ -247,20 +251,20 @@ export async function approveDepositService(depositId, adminId) {
       { session }
     );
 
-    // 6. Create transaction ledger entry
+    // 7. Create transaction ledger entry
     await Transaction.create(
       [
         {
           user: deposit.user,
           account: deposit.account,
-          type: 'DEPOSIT',
+          type: "DEPOSIT",
           amount: deposit.amount,
           balanceAfter: newBalance,
-          status: 'SUCCESS',
-          referenceType: 'DEPOSIT',
+          status: "SUCCESS",
+          referenceType: "DEPOSIT",
           referenceId: deposit._id,
           createdBy: adminId,
-          remark: 'Deposit approved'
+          remark: "Deposit approved"
         }
       ],
       { session }
@@ -280,6 +284,7 @@ export async function approveDepositService(depositId, adminId) {
     throw err;
   }
 }
+
 
 /* ADMIN REJECT */
 export async function rejectDepositService(depositId, adminId, reason) {
