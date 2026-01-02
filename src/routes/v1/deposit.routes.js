@@ -5,7 +5,8 @@ import {
   getDepositStatus,
   adminGetAllDeposits,
   adminApproveDeposit,
-  adminRejectDeposit
+  adminRejectDeposit,
+  adminEditDepositAmount
 } from "../../controllers/deposit.controller.js";
 import { authMiddleware } from '../../middlewares/auth.middleware.js';
 import { adminAuth } from '../../middlewares/adminAuth.middleware.js';
@@ -21,5 +22,5 @@ router.get('/:id/status', authMiddleware, getDepositStatus);
 router.get('/all', authMiddleware,adminAuth, adminGetAllDeposits);
 router.patch('/:id/approve', authMiddleware,adminAuth, adminApproveDeposit);
 router.patch('/:id/reject', authMiddleware,adminAuth, adminRejectDeposit);
-
+router.patch('/:id/edit-amount',authMiddleware,adminAuth,adminEditDepositAmount);
 export default router;

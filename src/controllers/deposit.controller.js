@@ -4,7 +4,8 @@ import {
   getDepositStatusService,
   adminGetAllDepositsService,
   approveDepositService,
-  rejectDepositService
+  rejectDepositService,
+  editDepositAmountService
 } from '../services/deposit.service.js';
 
 /* USER: CREATE DEPOSIT */
@@ -36,7 +37,8 @@ export async function getMyDeposits(req, res) {
       page = 1,
       limit = 10,
       startDate,
-      endDate
+      endDate,
+      status
     } = req.query;
 
     const result = await getUserDepositsService({
@@ -44,7 +46,8 @@ export async function getMyDeposits(req, res) {
       page: Number(page),
       limit: Number(limit),
       startDate,
-      endDate
+      endDate,
+      status
     });
 
     return res.status(200).json({
@@ -59,6 +62,7 @@ export async function getMyDeposits(req, res) {
     });
   }
 }
+
 /* USER: CHECK STATUS */
 export async function getDepositStatus(req, res) {
   try {
@@ -137,3 +141,29 @@ export async function adminRejectDeposit(req, res) {
     return res.status(400).json({ success: false, message: err.message });
   }
 }
+// edit deposit amount
+export async function adminEditDepositAmount(req, res) {
+  try {
+    const { id } = req.params;        // ✅ route se match
+    const { newAmount } = req.body;
+    const adminId = req.user._id;
+
+    const result = await editDepositAmountService({
+      depositId: id,                  // ✅ service ko sahi value
+      newAmount,
+      adminId
+    });
+
+    return res.json({
+      success: true,
+      message: 'Deposit amount updated successfully',
+      data: result
+    });
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({
+      success: false,
+      message: err.message
+    });
+  }
+}
+

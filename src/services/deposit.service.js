@@ -85,20 +85,34 @@ export async function getUserDepositsService({
   page = 1,
   limit = 10,
   startDate,
-  endDate
+  endDate,
+  status
 }) {
   const safePage = Math.max(Number(page) || 1, 1);
   const safeLimit = Math.min(Math.max(Number(limit) || 10, 1), 50);
   const skip = (safePage - 1) * safeLimit;
 
   /** BASE FILTER */
-  const filter = { user: userId };
+  const filter = {
+    user: userId
+  };
+
+  /** STATUS FILTER (PENDING / APPROVED / REJECTED) */
+  if (status) {
+    filter.status = status;
+  }
 
   /** DATE FILTER */
   if (startDate || endDate) {
     filter.createdAt = {};
-    if (startDate) filter.createdAt.$gte = new Date(startDate);
-    if (endDate) filter.createdAt.$lte = new Date(endDate);
+
+    if (startDate) {
+      filter.createdAt.$gte = new Date(startDate);
+    }
+
+    if (endDate) {
+      filter.createdAt.$lte = new Date(endDate);
+    }
   }
 
   /** PARALLEL QUERIES (FAST) */
@@ -304,4 +318,50 @@ export async function rejectDepositService(depositId, adminId, reason) {
 
   await deposit.save();
   return deposit;
+}
+
+/**
+ * ADMIN EDIT DEPOSIT AMOUNT
+ * RULE:
+ * - Only PENDING deposits can be edited
+ */
+export async function editDepositAmountService({
+  depositId,
+  newAmount,
+  adminId
+}) {
+  if (!depositId) {
+    throw new Error('Deposit ID is required');
+  }
+
+  if (!newAmount || newAmount <= 0) {
+    throw new Error('Invalid deposit amount');
+  }
+
+  // 1️⃣ Find pending deposit
+  const deposit = await Deposit.findOne({
+    _id: depositId,
+    status: 'PENDING'
+  });
+
+  if (!deposit) {
+    const err = new Error(
+      'Deposit not found or already processed'
+    );
+    err.statusCode = 400;
+    throw err;
+  }
+
+  // 2️⃣ Update amount
+  deposit.amount = newAmount;
+  deposit.actionBy = adminId;
+  deposit.updatedAt = new Date();
+
+  await deposit.save();
+
+  return {
+    _id: deposit._id,
+    amount: deposit.amount,
+    status: deposit.status
+  };
 }

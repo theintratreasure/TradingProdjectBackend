@@ -64,6 +64,12 @@ const AccountPlanSchema = new mongoose.Schema(
       default: true
     },
 
+    // ✅ REFERRAL REWARD AMOUNT
+    referral_reward_amount: {
+      type: Number,
+      default: 0 // amount credited when referral is successful
+    },
+
     isActive: {
       type: Boolean,
       default: true
