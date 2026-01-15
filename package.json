@@ -23,6 +23,7 @@
     "mongoose": "^9.0.1",
     "nodemailer": "^7.0.11",
     "web-push": "^3.6.7",
+    "websocket": "^1.0.35",
     "ws": "^8.19.0"
   },
   "devDependencies": {

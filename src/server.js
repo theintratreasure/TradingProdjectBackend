@@ -1,38 +1,32 @@
-import cluster from 'node:cluster';
-import dotenv from 'dotenv';
-import os from 'node:os';
-import http from 'node:http';
-import app from './app.js';
-import { connectDB } from './config/database.js';
-import startMarketWebSocket from './ws/market.ws.js';
+import dotenv from "dotenv";
+import http from "node:http";
+import app from "./app.js";
+import { connectDB } from "./config/database.js";
+import { attachMarketWS } from "./ws/market.js";
 
 dotenv.config();
 
-const PORT = process.env.PORT || 4000;
-const CPU_COUNT = os.cpus().length;
+const PORT = Number(process.env.PORT || 4000);
 
-if (cluster.isPrimary) {
-  // console.log(`Master ${process.pid} running`);
-  // console.log(`Forking ${CPU_COUNT} workers`);
-
-  for (let i = 0; i < CPU_COUNT; i++) {
-    cluster.fork();
-  }
-
-  cluster.on('exit', (worker) => {
-    // console.error(`Worker ${worker.process.pid} died. Restarting...`);
-    cluster.fork();
-  });
-
-} else {
+async function start() {
   await connectDB();
+  console.log("MongoDB connected");
 
   const server = http.createServer(app);
 
   server.keepAliveTimeout = 65000;
   server.headersTimeout = 66000;
-    startMarketWebSocket(server);
+
+  // attach websocket
+  attachMarketWS(server);
+
   server.listen(PORT, () => {
-    console.log(`Worker ${process.pid} listening on port ${PORT}`);
+    console.log(`Server running at http://localhost:${PORT}`);
+    console.log(`WebSocket Market WS at ws://localhost:${PORT}/ws/market`);
   });
 }
+
+start().catch((err) => {
+  console.error("Startup error:", err);
+  process.exit(1);
+});

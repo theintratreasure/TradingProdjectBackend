@@ -1,18 +1,25 @@
 import mongoose from 'mongoose';
 
-const MONGO_URI = process.env.MONGO_URI
 export async function connectDB() {
+  const uri = process.env.MONGO_URI;
+
+  if (!uri) {
+    console.error('MongoDB connection failed: MONGO_URI is missing in .env');
+    process.exit(1);
+  }
+
   try {
-    await mongoose.connect(MONGO_URI, {
-      maxPoolSize: 50,        // important for concurrency
+    await mongoose.connect(uri, {
+      maxPoolSize: 50,
       minPoolSize: 5,
       serverSelectionTimeoutMS: 5000,
-      socketTimeoutMS: 45000
+      socketTimeoutMS: 45000,
     });
 
     console.log('MongoDB connected');
   } catch (err) {
-    console.error('MongoDB connection failed', err.message);
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('MongoDB connection failed', message);
     process.exit(1);
   }
 }
