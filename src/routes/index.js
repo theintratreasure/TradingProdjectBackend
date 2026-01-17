@@ -14,6 +14,7 @@ import depositRoutes from "./v1/deposit.routes.js";
 import transactionRoutes from './v1/transaction.routes.js';
 import symbolRoutes from './v1/symbol.routes.js';
 import instrumentRoutes from './v1/instrument.routes.js';
+import watchlistRoutes from './v1/watchlist.routes.js';
 const router = Router();
 
 router.use("/v1/health", healthRoutes);
@@ -30,4 +31,5 @@ router.use("/v1/deposits", depositRoutes);
 router.use('/v1/transactions', transactionRoutes);
 router.use('/v1/symbol', symbolRoutes);
 router.use('/v1/instrument', instrumentRoutes);
+router.use('/v1/watchlist', watchlistRoutes);
 export default router;
