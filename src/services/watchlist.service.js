@@ -604,6 +604,4 @@ async searchInstrumentsOnly(qRaw, segmentRaw, limit) {
 
   return { data: finalList };
 },
-
-
 };

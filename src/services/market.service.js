@@ -1,0 +1,266 @@
+import dayjs from 'dayjs';
+import { MarketSchedule } from '../models/MarketSchedule.model.js';
+import redis, { isRedisReady } from '../config/redis.js';
+import { REDIS_MARKET_SCHEDULE_KEY, REDIS_MARKET_STATUS_KEY } from '../config/market.redis.js';
+
+const normalizeSegment = (segment) => String(segment || '').trim().toLowerCase();
+const normalizeDay = (dayName) => String(dayName || '').trim().toUpperCase();
+
+const isValidHHMM = (t) => {
+  const raw = String(t || '').trim();
+  return /^([01]\d|2[0-3]):([0-5]\d)$/.test(raw);
+};
+
+const toMinutes = (hhmm) => {
+  const [h, m] = String(hhmm).split(':').map((v) => Number(v));
+  return h * 60 + m;
+};
+
+const getTodayYYYYMMDD = () => dayjs().format('YYYY-MM-DD');
+const getTodayDayName = () => dayjs().format('dddd').toUpperCase();
+const getNowMinutes = () => dayjs().hour() * 60 + dayjs().minute();
+
+const resolveTodayTiming = (schedule) => {
+  const todayDate = getTodayYYYYMMDD();
+  const todayDay = getTodayDayName();
+
+  let openTime = schedule.openTime;
+  let closeTime = schedule.closeTime;
+
+  // 1) Day override example: SATURDAY close 14:30
+  if (schedule.dayOverrides && schedule.dayOverrides[todayDay]) {
+    const d = schedule.dayOverrides[todayDay];
+    if (d.openTime && isValidHHMM(d.openTime)) openTime = d.openTime;
+    if (d.closeTime && isValidHHMM(d.closeTime)) closeTime = d.closeTime;
+  }
+
+  // 2) Date override example: 2026-02-03 close 16:00 (highest priority)
+  if (schedule.dateOverrides && schedule.dateOverrides[todayDate]) {
+    const x = schedule.dateOverrides[todayDate];
+    if (x.openTime && isValidHHMM(x.openTime)) openTime = x.openTime;
+    if (x.closeTime && isValidHHMM(x.closeTime)) closeTime = x.closeTime;
+  }
+
+  return { openTime, closeTime, todayDate, todayDay };
+};
+
+const computeMarketState = (schedule) => {
+  const { openTime, closeTime, todayDate, todayDay } = resolveTodayTiming(schedule);
+
+  if (!schedule.isEnabled) {
+    return { isMarketOpen: false, reason: 'DISABLED', openTime, closeTime };
+  }
+
+  if (Array.isArray(schedule.holidays) && schedule.holidays.includes(todayDate)) {
+    return { isMarketOpen: false, reason: 'HOLIDAY', openTime, closeTime };
+  }
+
+  if (Array.isArray(schedule.weeklyOff) && schedule.weeklyOff.includes(todayDay)) {
+    return { isMarketOpen: false, reason: 'WEEKLY_OFF', openTime, closeTime };
+  }
+
+  const openMin = toMinutes(openTime);
+  const closeMin = toMinutes(closeTime);
+  const nowMin = getNowMinutes();
+
+  const isOpen = nowMin >= openMin && nowMin <= closeMin;
+
+  return {
+    isMarketOpen: isOpen,
+    reason: isOpen ? 'OPEN_TIME_WINDOW' : 'OUTSIDE_HOURS',
+    openTime,
+    closeTime,
+  };
+};
+
+const redisGetSafe = async (key) => {
+  try {
+    if (!isRedisReady()) return null;
+    return await redis.get(key);
+  } catch (err) {
+    console.error('Redis GET failed:', key, err?.message || err);
+    return null;
+  }
+};
+
+const redisSetSafe = async (key, value) => {
+  try {
+    if (!isRedisReady()) return false;
+    await redis.set(key, value);
+    return true;
+  } catch (err) {
+    console.error('Redis SET failed:', key, err?.message || err);
+    return false;
+  }
+};
+
+export const marketService = {
+  async ensureDefaultSchedule(segment) {
+    const seg = normalizeSegment(segment);
+    if (!seg) return null;
+
+    const existing = await MarketSchedule.findOne({ segment: seg }).lean();
+    if (existing) return existing;
+
+    const created = await MarketSchedule.create({
+      segment: seg,
+      timezone: 'Asia/Kolkata',
+      openTime: '09:15',
+      closeTime: '15:30',
+      weeklyOff: ['SUNDAY'],
+      holidays: [],
+      dayOverrides: {
+        SATURDAY: { closeTime: '14:30' },
+      },
+      dateOverrides: {},
+      isEnabled: true,
+    });
+
+    return created.toObject();
+  },
+
+  async getSchedule(segment) {
+    const seg = normalizeSegment(segment);
+    if (!seg) return { error: { status: 400, message: 'segment is required' } };
+
+    // 1) Redis cache
+    const cached = await redisGetSafe(REDIS_MARKET_SCHEDULE_KEY(seg));
+    if (cached) {
+      return { data: JSON.parse(cached) };
+    }
+
+    // 2) DB fallback
+    const schedule = await this.ensureDefaultSchedule(seg);
+    if (!schedule) return { error: { status: 404, message: 'schedule not found' } };
+
+    // 3) cache back
+    await redisSetSafe(REDIS_MARKET_SCHEDULE_KEY(seg), JSON.stringify(schedule));
+
+    return { data: schedule };
+  },
+
+  async updateSchedule(segment, payload) {
+    const seg = normalizeSegment(segment);
+    if (!seg) return { error: { status: 400, message: 'segment is required' } };
+
+    const openTime = payload?.openTime;
+    const closeTime = payload?.closeTime;
+
+    if (!isValidHHMM(openTime)) {
+      return { error: { status: 400, message: 'Invalid openTime (HH:mm)' } };
+    }
+    if (!isValidHHMM(closeTime)) {
+      return { error: { status: 400, message: 'Invalid closeTime (HH:mm)' } };
+    }
+
+    const weeklyOff = Array.isArray(payload?.weeklyOff)
+      ? payload.weeklyOff.map(normalizeDay)
+      : ['SUNDAY'];
+
+    const holidays = Array.isArray(payload?.holidays)
+      ? payload.holidays.map((d) => String(d).trim())
+      : [];
+
+    const timezone = payload?.timezone ? String(payload.timezone).trim() : 'Asia/Kolkata';
+    const isEnabled = typeof payload?.isEnabled === 'boolean' ? payload.isEnabled : true;
+
+    const dayOverrides =
+      payload?.dayOverrides && typeof payload.dayOverrides === 'object' ? payload.dayOverrides : {};
+
+    const dateOverrides =
+      payload?.dateOverrides && typeof payload.dateOverrides === 'object' ? payload.dateOverrides : {};
+
+    const updated = await MarketSchedule.findOneAndUpdate(
+      { segment: seg },
+      {
+        $set: {
+          segment: seg,
+          openTime: String(openTime),
+          closeTime: String(closeTime),
+          weeklyOff,
+          holidays,
+          timezone,
+          isEnabled,
+          dayOverrides,
+          dateOverrides,
+        },
+      },
+      { new: true, upsert: true }
+    ).lean();
+
+    // Schedule cache
+    await redisSetSafe(REDIS_MARKET_SCHEDULE_KEY(seg), JSON.stringify(updated));
+
+    // Status cache update instantly
+    const computed = computeMarketState(updated);
+    const status = {
+      segment: seg,
+      isMarketOpen: computed.isMarketOpen,
+      reason: computed.reason,
+      openTime: computed.openTime,
+      closeTime: computed.closeTime,
+      timezone: updated.timezone,
+      lastCheckedAt: new Date().toISOString(),
+    };
+
+    await redisSetSafe(REDIS_MARKET_STATUS_KEY(seg), JSON.stringify(status));
+
+    return { data: updated };
+  },
+
+  async getMarketStatus(segment) {
+    const seg = normalizeSegment(segment);
+    if (!seg) return { error: { status: 400, message: 'segment is required' } };
+
+    // 1) Redis cache
+    const cachedStatus = await redisGetSafe(REDIS_MARKET_STATUS_KEY(seg));
+    if (cachedStatus) {
+      return { data: JSON.parse(cachedStatus) };
+    }
+
+    // 2) compute using schedule (DB/redis)
+    const scheduleRes = await this.getSchedule(seg);
+    if (scheduleRes.error) return scheduleRes;
+
+    const schedule = scheduleRes.data;
+    const computed = computeMarketState(schedule);
+
+    const status = {
+      segment: seg,
+      isMarketOpen: computed.isMarketOpen,
+      reason: computed.reason,
+      openTime: computed.openTime,
+      closeTime: computed.closeTime,
+      timezone: schedule.timezone,
+      lastCheckedAt: new Date().toISOString(),
+    };
+
+    // 3) set cache
+    await redisSetSafe(REDIS_MARKET_STATUS_KEY(seg), JSON.stringify(status));
+
+    return { data: status };
+  },
+
+  async getMarketStatusBySegments(segments) {
+    const uniqueSegments = Array.isArray(segments)
+      ? Array.from(new Set(segments.map(normalizeSegment).filter(Boolean)))
+      : [];
+
+    const marketBySegment = {};
+
+    for (const seg of uniqueSegments) {
+      const res = await this.getMarketStatus(seg);
+      if (res.data) marketBySegment[seg] = res.data;
+    }
+
+    return { data: marketBySegment };
+  },
+
+  // Optional debug function
+  async debugRedis() {
+    return {
+      isReady: isRedisReady(),
+      status: typeof redis.status === 'string' ? redis.status : 'unknown',
+    };
+  },
+};

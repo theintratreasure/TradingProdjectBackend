@@ -2,7 +2,8 @@ import dotenv from "dotenv";
 import http from "node:http";
 import app from "./app.js";
 import { connectDB } from "./config/database.js";
-import { attachMarketWS } from "./ws/market.js";
+import { startMarketCron } from "./jobs/market.cron.js";
+// import { attachMarketWS } from "./ws/market.js";
 
 dotenv.config();
 
@@ -18,11 +19,12 @@ async function start() {
   server.headersTimeout = 66000;
 
   // attach websocket
-  attachMarketWS(server);
+  // attachMarketWS(server);
 
   server.listen(PORT, () => {
     console.log(`Server running at http://localhost:${PORT}`);
     console.log(`WebSocket Market WS at ws://localhost:${PORT}/ws/market`);
+    startMarketCron();
   });
 }
 
