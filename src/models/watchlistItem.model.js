@@ -1,10 +1,17 @@
-import mongoose from 'mongoose';
+import mongoose from "mongoose";
 
 const WatchlistItemSchema = new mongoose.Schema(
   {
     userId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
+      ref: "User",
+      required: true,
+    },
+
+    // ✅ Account wise watchlist
+    accountId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Account",
       required: true,
       index: true,
     },
@@ -31,12 +38,6 @@ const WatchlistItemSchema = new mongoose.Schema(
       default: true,
       index: true,
     },
-
-    isEnable: {
-      type: Boolean,
-      default: true,
-      index: true,
-    },
   },
   {
     timestamps: true,
@@ -44,16 +45,18 @@ const WatchlistItemSchema = new mongoose.Schema(
   }
 );
 
+// Prevent duplicates per account
 WatchlistItemSchema.index(
-  { userId: 1, code: 1 },
-  { unique: true, name: 'uniq_user_code' }
+  { userId: 1, accountId: 1, code: 1 },
+  { unique: true, name: "uniq_user_account_code" }
 );
 
+// Sorting index (account wise)
 WatchlistItemSchema.index(
-  { userId: 1, createdAt: -1, _id: -1 },
-  { name: 'user_watchlist_sort' }
+  { userId: 1, accountId: 1, createdAt: -1, _id: -1 },
+  { name: "user_account_watchlist_sort" }
 );
 
-const WatchlistItem = mongoose.model('WatchlistItem', WatchlistItemSchema);
+const WatchlistItem = mongoose.model("WatchlistItem", WatchlistItemSchema);
 
 export default WatchlistItem;

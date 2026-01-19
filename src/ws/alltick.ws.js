@@ -3,15 +3,32 @@ import WebSocket from "ws";
 import EventEmitter from "events";
 import { v4 as uuidv4 } from "uuid";
 import dotenv from "dotenv";
+import { HighLowService } from "../services/highlow.service.js";
 
 dotenv.config();
 
 // ========================
 // AllTick API URLs
 // ========================
-const ALLTICK_TOKEN = process.env.ALLTICK_API_KEY;
+const ALLTICK_TOKEN = String(process.env.ALLTICK_API_KEY || "").trim();
+
 const CRYPTO_URL = `${process.env.ALLTICK_CRYPTO_WS_URL}?token=${ALLTICK_TOKEN}`;
 const STOCK_URL = `${process.env.ALLTICK_STOCK_WS_URL}?token=${ALLTICK_TOKEN}`;
+
+// ========================
+// Helpers
+// ========================
+const nowTs = () => Date.now();
+
+const buildTrace = () => {
+  return `${uuidv4()}-${nowTs()}`;
+};
+
+const normalizeMarket = (v) => String(v || "").trim().toLowerCase();
+const normalizeSymbol = (v) => String(v || "").trim().toUpperCase();
+
+const makeKey = (market, symbol) =>
+  `${normalizeMarket(market)}:${normalizeSymbol(symbol)}`;
 
 // ========================
 // AllTick WebSocket Manager
@@ -22,64 +39,123 @@ class AlltickWS extends EventEmitter {
     this.url = url;
     this.marketName = marketName; // crypto / stock
     this.client = null;
-    this.subscriptions = new Map();
+    this.subscriptions = new Map(); // code -> depth
     this.connected = false;
+
     this.heartbeatTimer = null;
     this.reconnectTimer = null;
+
+    this.seqId = 1;
+    this.pushTimer = null;
+
+    // ✅ reconnect stability
+    this.isConnecting = false;
+    this.reconnectAttempts = 0;
+
+    // ✅ heartbeat safety
+    this.lastPongAt = 0;
+  }
+
+  nextSeqId() {
+    this.seqId += 1;
+    if (this.seqId > 999999999) this.seqId = 1;
+    return this.seqId;
   }
 
   connect() {
-    if (this.client) this.client.close();
+    if (!ALLTICK_TOKEN) {
+      console.error(`[${this.marketName}] ALLTICK_API_KEY missing`);
+      return;
+    }
 
-    this.client = new WebSocket(this.url);
+    // ✅ avoid double connect loops
+    if (this.isConnecting) return;
+    this.isConnecting = true;
+
+    if (this.client) {
+      try {
+        this.client.terminate();
+      } catch (e) {}
+    }
+
+    this.client = new WebSocket(this.url, {
+      handshakeTimeout: 10000,
+    });
 
     this.client.on("open", () => {
       this.connected = true;
+      this.isConnecting = false;
+
+      // ✅ reset backoff after success
+      this.reconnectAttempts = 0;
+
+      // ✅ set initial pong time
+      this.lastPongAt = Date.now();
+
       console.log(`[${this.marketName}] Connected to AllTick WS`);
+
       this.emit("ready");
-      this.sendHeartbeat();
+      this.startHeartbeat();
       this.restoreSubscriptions();
     });
 
     this.client.on("message", (raw) => {
       const msg = raw.toString();
 
-      if (msg === "pong") {
-        console.log(`[${this.marketName}] Pong received`);
-        return;
-      }
-
       try {
         const json = JSON.parse(msg);
 
+        // subscription confirm
         if (json.cmd_id === 22003) {
-          console.log(`[${this.marketName}] Subscription confirmed`, json);
+          if (json.ret === 200) {
+            console.log(`[${this.marketName}] Subscription confirmed`, json);
+          } else {
+            console.error(`[${this.marketName}] Subscription failed`, json);
+          }
           this.emit("subscribed", json);
+          return;
         }
 
-        if (json.cmd_id === 22999) {
-          // Real-time orderbook data
+        // real-time orderbook data
+        if (json.cmd_id === 22999 && json.data) {
           this.emit("data", json.data);
+          return;
         }
 
-        if (json.ret && json.ret !== 200) {
+        // log errors
+        if (typeof json.ret === "number" && json.ret !== 200) {
           console.error(`[${this.marketName}] AllTick error`, json);
         }
       } catch (err) {
-        console.error(`[${this.marketName}] Invalid JSON message`, msg, err);
+        console.error(`[${this.marketName}] Invalid JSON message`, msg);
       }
     });
 
-    this.client.on("close", () => {
+    this.client.on("pong", () => {
+      this.lastPongAt = Date.now();
+    });
+
+    this.client.on("close", (code, reason) => {
       this.connected = false;
-      console.warn(`[${this.marketName}] Connection closed, reconnecting...`);
+      this.isConnecting = false;
+
+      const reasonText = String(reason || "").trim();
+
+      console.warn(
+        `[${this.marketName}] Connection closed (code=${code}) reason=${reasonText}`
+      );
+
+      this.stopHeartbeat();
       this.scheduleReconnect();
     });
 
-
     this.client.on("error", (err) => {
       this.connected = false;
+      this.isConnecting = false;
+
       console.error(`[${this.marketName}] Connection error`, err);
+
+      this.stopHeartbeat();
       this.scheduleReconnect();
     });
   }
@@ -87,43 +163,108 @@ class AlltickWS extends EventEmitter {
   scheduleReconnect() {
     if (this.reconnectTimer) return;
 
+    // ✅ exponential backoff: 2s, 4s, 8s, 16s, 30s max
+    this.reconnectAttempts += 1;
+    const delay = Math.min(
+      2000 * Math.pow(2, this.reconnectAttempts - 1),
+      30000
+    );
+
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       console.log(`[${this.marketName}] Reconnecting to AllTick WS...`);
       this.connect();
-    }, 2000);
+    }, delay);
   }
 
-  sendHeartbeat() {
+  startHeartbeat() {
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
 
+    // ✅ init pong timestamp
+    if (!this.lastPongAt) this.lastPongAt = Date.now();
+
     this.heartbeatTimer = setInterval(() => {
-      if (this.connected) this.client.send("ping");
-    }, 10000); // every 10s
+      if (!this.connected) return;
+      if (!this.client) return;
+      if (this.client.readyState !== WebSocket.OPEN) return;
+
+      const diff = Date.now() - this.lastPongAt;
+
+      // ✅ if no pong for 45s, force reconnect
+      if (diff > 45000) {
+        console.warn(`[${this.marketName}] Pong timeout, reconnecting...`);
+        try {
+          this.client.terminate();
+        } catch (e) {}
+        return;
+      }
+
+      try {
+        this.client.ping();
+      } catch (e) {}
+    }, 20000); // ✅ ping every 20s
   }
 
-  subscribe(code, level = 5) {
-    this.subscriptions.set(code, level);
-    this.pushSubscription();
+  stopHeartbeat() {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+  }
+
+  subscribe(codeRaw, levelRaw = 5) {
+    const code = normalizeSymbol(codeRaw);
+    const depth = Number(levelRaw || 5);
+
+    if (!code) return;
+
+    const finalDepth = Number.isFinite(depth) ? depth : 5;
+
+    const prev = this.subscriptions.get(code);
+    if (prev === finalDepth) return;
+
+    this.subscriptions.set(code, finalDepth);
+    this.schedulePushSubscription();
+  }
+
+  schedulePushSubscription() {
+    if (this.pushTimer) clearTimeout(this.pushTimer);
+
+    this.pushTimer = setTimeout(() => {
+      this.pushTimer = null;
+      this.pushSubscription();
+    }, 200);
   }
 
   pushSubscription() {
     if (!this.connected) return;
+    if (!this.client) return;
+    if (this.client.readyState !== WebSocket.OPEN) return;
+    if (this.subscriptions.size === 0) return;
+
+    const symbolList = [];
+    for (const [code, depth] of this.subscriptions.entries()) {
+      symbolList.push({
+        code,
+        depth_level: depth,
+      });
+    }
 
     const payload = {
       cmd_id: 22002,
-      seq_id: 123,
-      trace: "3baaa938-f92c-4a74-a228-fd49d5e2f8bc-1678419657806",
+      seq_id: this.nextSeqId(),
+      trace: buildTrace(),
       data: {
-        symbol_list: [...this.subscriptions.entries()].map(([code, depth]) => ({
-          code,
-          depth_level: depth,
-        })),
+        symbol_list: symbolList,
       },
     };
 
-    this.client.send(JSON.stringify(payload));
-    console.log(`[${this.marketName}] Subscription sent:`, payload);
+    try {
+      this.client.send(JSON.stringify(payload));
+      console.log(`[${this.marketName}] Subscription sent (${symbolList.length})`);
+    } catch (e) {
+      console.error(`[${this.marketName}] Failed to send subscription`, e);
+    }
   }
 
   restoreSubscriptions() {
@@ -148,23 +289,52 @@ wsStock.connect();
 // ========================
 export const wsClients = new Map();
 
+// clientId -> Set("market:SYMBOL")
+const clientSubscriptions = new Map();
+
 export function registerClient(client) {
   const id = uuidv4();
+  client.clientId = id;
+
   wsClients.set(id, client);
+  clientSubscriptions.set(id, new Set());
+
   return id;
 }
 
 export function removeClient(id) {
+  clientSubscriptions.delete(id);
   wsClients.delete(id);
 }
 
 // ========================
-// Broadcast data to all clients
+// Broadcast only to subscribed clients
 // ========================
 function broadcastData(market, data) {
+  const rawCode =
+    data?.code ||
+    data?.symbol ||
+    data?.s ||
+    data?.instrument ||
+    data?.instrument_code;
+
+  const symbol = normalizeSymbol(rawCode);
+  if (!symbol) return;
+
+  const key = makeKey(market, symbol);
   const msg = JSON.stringify({ type: "orderbook", market, data });
-  for (const ws of wsClients.values()) {
-    if (ws.readyState === WebSocket.OPEN) ws.send(msg);
+
+  for (const [clientId, ws] of wsClients.entries()) {
+    if (ws.readyState !== WebSocket.OPEN) continue;
+
+    const subs = clientSubscriptions.get(clientId);
+    if (!subs) continue;
+
+    if (!subs.has(key)) continue;
+
+    try {
+      ws.send(msg);
+    } catch (e) {}
   }
 }
 
@@ -174,23 +344,98 @@ wsStock.on("data", (d) => broadcastData("stock", d));
 // ========================
 // Handle incoming client messages
 // ========================
-export function handleClientMessage(clientWs, msg) {
+export async function handleClientMessage(clientWs, msg) {
   try {
     const data = JSON.parse(msg);
 
-    if (data.type === "subscribe") {
-      const { market, symbol, depth } = data;
+    const clientId = String(clientWs.clientId || "").trim();
+    if (!clientId) {
+      clientWs.send(JSON.stringify({ status: "error", error: "clientId missing" }));
+      return;
+    }
 
-      if (market === "crypto") wsCrypto.subscribe(symbol, depth || 5);
-      if (market === "stock") wsStock.subscribe(symbol, depth || 5);
+    const subs = clientSubscriptions.get(clientId);
+    if (!subs) {
+      clientWs.send(
+        JSON.stringify({ status: "error", error: "client not registered" })
+      );
+      return;
+    }
+
+    const type = String(data.type || "").trim();
+    const market = normalizeMarket(data.market);
+    const symbol = normalizeSymbol(data.symbol);
+
+    if (!type || !market || !symbol) {
+      clientWs.send(
+        JSON.stringify({
+          status: "error",
+          error: "type, market and symbol required",
+        })
+      );
+      return;
+    }
+
+    const key = makeKey(market, symbol);
+
+    // ✅ SUBSCRIBE
+    if (type === "subscribe") {
+      const depth = Number(data.depth || 5);
+      const finalDepth = Number.isFinite(depth) ? depth : 5;
+
+      const already = subs.has(key);
+      subs.add(key);
+
+      if (!already) {
+        if (market === "crypto") wsCrypto.subscribe(symbol, finalDepth);
+        if (market === "stock") wsStock.subscribe(symbol, finalDepth);
+      }
+
+      // ✅ Fetch Day High/Low (Redis cached + inflight protected)
+      const hlRes = await HighLowService.getDayHighLow(market, symbol);
+
+      const dayHigh =
+        hlRes && hlRes.data && typeof hlRes.data.high === "number"
+          ? hlRes.data.high
+          : null;
+
+      const dayLow =
+        hlRes && hlRes.data && typeof hlRes.data.low === "number"
+          ? hlRes.data.low
+          : null;
 
       clientWs.send(
-        JSON.stringify({ status: "subscribed", market, symbol, depth: depth || 5 })
+        JSON.stringify({
+          status: "subscribed",
+          market,
+          symbol,
+          depth: finalDepth,
+          dayHigh,
+          dayLow,
+        })
       );
-      console.log(`[WS] Client subscribed: ${market} - ${symbol} - depth ${depth || 5}`);
+
+      return;
     }
+
+    // ✅ UNSUBSCRIBE
+    if (type === "unsubscribe") {
+      subs.delete(key);
+
+      clientWs.send(
+        JSON.stringify({
+          status: "unsubscribed",
+          market,
+          symbol,
+        })
+      );
+
+      return;
+    }
+
+    clientWs.send(JSON.stringify({ status: "error", error: "unknown message type" }));
   } catch (err) {
-    console.error("Invalid client message", msg, err);
-    clientWs.send(JSON.stringify({ status: "error", error: err.message }));
+    console.error("Invalid client message", msg);
+    clientWs.send(JSON.stringify({ status: "error", error: "Invalid JSON" }));
   }
 }

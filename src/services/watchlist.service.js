@@ -1,54 +1,99 @@
-import WatchlistItem from '../models/watchlistItem.model.js';
-import redisClient from '../config/redis.js';
+import WatchlistItem from "../models/watchlistItem.model.js";
+import redisClient from "../config/redis.js";
+import InstrumentModel from "../models/Instrument.model.js";
+import DefaultWatchlistItem from "../models/defaultWatchlistItem.model.js";
 
-const REDIS_DEFAULT_KEY = 'default:watchlist:v1';
-const REDIS_USER_KEY = (userId) => `user:watchlist:v1:${String(userId)}`;
+const REDIS_DEFAULT_KEY = "default:watchlist:v1";
 
-const normalizeCode = (value) => String(value || '').trim().toUpperCase();
-const normalizeName = (value) => String(value || '').trim();
+//  account-wise cache
+const REDIS_ACCOUNT_KEY = (accountId) =>
+  `account:watchlist:v1:${String(accountId)}`;
+
+const normalizeCode = (value) =>
+  String(value || "")
+    .trim()
+    .toUpperCase();
+
+const normalizeName = (value) => String(value || "").trim();
 
 const parseLimit = (value) => {
   const limitRaw = Number(value || 50);
   return Math.min(Math.max(limitRaw, 1), 200);
 };
 
+const normalizeAccountId = (value) => {
+  const accountId = String(value || "").trim();
+  return accountId || "";
+};
+
 const isRedisReady = () => {
   try {
-    return Boolean(redisClient && redisClient.isOpen === true);
+    if (!redisClient) return false;
+
+    //  ioredis uses status
+    return (
+      typeof redisClient.status === "string" && redisClient.status === "ready"
+    );
   } catch (error) {
     return false;
   }
 };
 
 const getRedisJSON = async (key) => {
-  if (!isRedisReady()) return null;
-
-  const raw = await redisClient.get(key);
-  if (!raw) return null;
+  if (!isRedisReady()) {
+    return null;
+  }
 
   try {
-    return JSON.parse(raw);
+    const raw = await redisClient.get(key);
+
+    if (!raw) {
+      return null;
+    }
+
+    try {
+      const parsed = JSON.parse(raw);
+      return parsed;
+    } catch (error) {
+      return null;
+    }
   } catch (error) {
     return null;
   }
 };
 
 const setRedisJSON = async (key, value, ttlSeconds) => {
-  if (!isRedisReady()) return;
-
-  const payload = JSON.stringify(value);
-
-  if (typeof ttlSeconds === 'number' && ttlSeconds > 0) {
-    await redisClient.setEx(key, ttlSeconds, payload);
-    return;
+  if (!isRedisReady()) {
+    return false;
   }
 
-  await redisClient.set(key, payload);
+  try {
+    const payload = JSON.stringify(value);
+
+    if (typeof ttlSeconds === "number" && ttlSeconds > 0) {
+      //  ioredis TTL set
+      await redisClient.set(key, payload, "EX", ttlSeconds);
+      return true;
+    }
+
+    await redisClient.set(key, payload);
+    return true;
+  } catch (error) {
+    return false;
+  }
 };
 
 const delRedis = async (key) => {
-  if (!isRedisReady()) return;
-  await redisClient.del(key);
+  if (!isRedisReady()) {
+    return false;
+  }
+
+  try {
+    await redisClient.del(key);
+    return true;
+  } catch (error) {
+    return false;
+  }
 };
 
 export const watchlistService = {
@@ -57,87 +102,184 @@ export const watchlistService = {
   normalizeName,
 
   // -------------------------
-  // DEFAULT WATCHLIST (REDIS)
+  // DEFAULT WATCHLIST (DB + REDIS CACHE)
   // -------------------------
 
   async getDefaultList() {
-    const list = await getRedisJSON(REDIS_DEFAULT_KEY);
 
-    if (!Array.isArray(list)) return [];
+    //  Fast return from Redis
+    const cached = await getRedisJSON(REDIS_DEFAULT_KEY);
 
-    return list
-      .filter((x) => x && typeof x === 'object')
-      .map((x) => ({
-        code: normalizeCode(x.code),
-        name: normalizeName(x.name),
-      }))
-      .filter((x) => x.code && x.name);
+    if (Array.isArray(cached)) {
+
+      return cached
+        .filter((x) => x && typeof x === "object")
+        .map((x) => ({
+          code: normalizeCode(x.code),
+          name: normalizeName(x.name),
+        }))
+        .filter((x) => x.code && x.name);
+    }
+
+
+    // Cache miss => fetch from DB
+    const list = await DefaultWatchlistItem.find({})
+      .sort({ createdAt: -1, _id: -1 })
+      .select("code name");
+
+
+    if (!Array.isArray(list) || list.length === 0) {
+      const savedEmpty = await setRedisJSON(REDIS_DEFAULT_KEY, [], 300);
+      return [];
+    }
+
+    const codes = list.map((x) => normalizeCode(x.code)).filter(Boolean);
+
+    //  return only active instruments
+    const instruments = await InstrumentModel.find({
+      code: { $in: codes },
+      isActive: true,
+    }).select("code name");
+
+    if (!Array.isArray(instruments) || instruments.length === 0) {
+      const savedEmpty = await setRedisJSON(REDIS_DEFAULT_KEY, [], 300);
+      return [];
+    }
+
+    const activeMap = new Map(
+      instruments.map((i) => [normalizeCode(i.code), normalizeName(i.name)])
+    );
+
+    const finalList = list
+      .map((x) => {
+        const code = normalizeCode(x.code);
+        const name = activeMap.get(code);
+        if (!code || !name) return null;
+        return { code, name };
+      })
+      .filter((x) => x && x.code && x.name);
+
+
+    //  cache for fast next request
+    const saved = await setRedisJSON(REDIS_DEFAULT_KEY, finalList, 300);
+
+    //  verify cache write
+    const verify = await getRedisJSON(REDIS_DEFAULT_KEY);
+    return finalList;
   },
 
   async addDefaultItem(payload) {
     const code = normalizeCode(payload?.code);
-    const name = normalizeName(payload?.name);
 
-    if (!code) return { error: { status: 400, message: 'Code is required' } };
-    if (!name) return { error: { status: 400, message: 'Name is required' } };
+    if (!code) return { error: { status: 400, message: "Code is required" } };
+    if (code.length > 30)
+      return { error: { status: 400, message: "Code is too long" } };
 
-    if (code.length > 30) return { error: { status: 400, message: 'Code is too long' } };
-    if (name.length > 60) return { error: { status: 400, message: 'Name is too long' } };
+    const instrument = await InstrumentModel.findOne({ code }).select(
+      "code name isActive"
+    );
 
-    const list = await this.getDefaultList();
-
-    const exists = list.find((x) => x.code === code);
-
-    if (exists) {
-      const updated = list.map((x) => (x.code === code ? { code, name } : x));
-      await setRedisJSON(REDIS_DEFAULT_KEY, updated, 0);
-      return { data: updated, message: 'Default item updated' };
+    if (!instrument) {
+      return { error: { status: 404, message: "Instrument not found" } };
     }
 
-    const updated = [{ code, name }, ...list];
-    await setRedisJSON(REDIS_DEFAULT_KEY, updated, 0);
+    if (instrument.isActive !== true) {
+      return { error: { status: 400, message: "Instrument is not active" } };
+    }
 
-    return { data: updated, message: 'Default item added' };
+    const name = normalizeName(instrument.name);
+
+    if (!name) return { error: { status: 400, message: "Name is required" } };
+    if (name.length > 60)
+      return { error: { status: 400, message: "Name is too long" } };
+
+    const existing = await DefaultWatchlistItem.findOne({ code }).select(
+      "_id code name"
+    );
+
+    if (existing) {
+      if (existing.name !== name) {
+        existing.name = name;
+        await existing.save();
+
+        await delRedis(REDIS_DEFAULT_KEY);
+
+        const updatedList = await this.getDefaultList();
+        return {
+          data: updatedList,
+          message: "Default item updated",
+          alreadyExists: true,
+        };
+      }
+
+      return {
+        error: {
+          status: 409,
+          message: "This instrument is already added in default watchlist",
+        },
+      };
+    }
+
+    await DefaultWatchlistItem.create({ code, name });
+
+    await delRedis(REDIS_DEFAULT_KEY);
+
+    const updatedList = await this.getDefaultList();
+
+    return { data: updatedList, message: "Default item added" };
   },
 
   async removeDefaultItem(codeRaw) {
     const code = normalizeCode(codeRaw);
-    if (!code) return { error: { status: 400, message: 'Code is required' } };
+    if (!code) return { error: { status: 400, message: "Code is required" } };
 
-    const list = await this.getDefaultList();
-    const updated = list.filter((x) => x.code !== code);
+    const removed = await DefaultWatchlistItem.findOneAndDelete({ code }).select(
+      "_id code name"
+    );
 
-    await setRedisJSON(REDIS_DEFAULT_KEY, updated, 0);
+    if (!removed) {
+      return { error: { status: 404, message: "Default item not found" } };
+    }
 
-    return { data: updated, message: 'Default item removed' };
+    await delRedis(REDIS_DEFAULT_KEY);
+
+    const updatedList = await this.getDefaultList();
+
+    return { data: updatedList, message: "Default item removed" };
   },
 
   // -------------------------
-  // USER DEFAULT SEEDING
+  // ACCOUNT DEFAULT SEEDING
   // -------------------------
 
-  async ensureDefaultForUser(userId) {
+  async ensureDefaultForAccount(userId, accountIdRaw) {
+    const accountId = normalizeAccountId(accountIdRaw);
+
+    if (!accountId) {
+      return { error: { status: 400, message: "AccountId is required" } };
+    }
+
     const total = await WatchlistItem.countDocuments({
       userId,
+      accountId,
       isAdded: true,
-      isEnable: true,
     });
 
-    if (total > 0) return;
+    if (total > 0) return { data: null, message: "Account watchlist already exists" };
 
     const defaultList = await this.getDefaultList();
-    if (defaultList.length === 0) return;
+    if (defaultList.length === 0) return { data: null, message: "Default watchlist is empty" };
 
     const ops = defaultList.map((item) => ({
       updateOne: {
-        filter: { userId, code: item.code },
+        filter: { userId, accountId, code: item.code },
         update: {
           $setOnInsert: {
             userId,
+            accountId,
             code: item.code,
             name: item.name,
             isAdded: true,
-            isEnable: true,
           },
         },
         upsert: true,
@@ -146,70 +288,142 @@ export const watchlistService = {
 
     await WatchlistItem.bulkWrite(ops, { ordered: false });
 
-    // clear cache
-    await delRedis(REDIS_USER_KEY(userId));
+    await delRedis(REDIS_ACCOUNT_KEY(accountId));
+
+    return { data: null, message: "Default watchlist seeded for account" };
   },
 
   // -------------------------
-  // USER WATCHLIST (CACHE)
+  // ACCOUNT WATCHLIST (CACHE)
   // -------------------------
 
-  async getUserWatchlist(userId, limit) {
-    const cached = await getRedisJSON(REDIS_USER_KEY(userId));
+  async getAccountWatchlist(userId, accountIdRaw, limit) {
+    const accountId = normalizeAccountId(accountIdRaw);
+
+    if (!accountId) {
+      return { error: { status: 400, message: "AccountId is required" } };
+    }
+
+    const cached = await getRedisJSON(REDIS_ACCOUNT_KEY(accountId));
     if (Array.isArray(cached)) {
-      return cached.slice(0, limit);
+      return { data: cached.slice(0, limit), message: "Watchlist fetched (cache)" };
     }
 
     const items = await WatchlistItem.find({
       userId,
+      accountId,
       isAdded: true,
-      isEnable: true,
     })
       .sort({ createdAt: -1, _id: -1 })
       .limit(limit)
-      .select('_id code name isAdded isEnable createdAt updatedAt');
+      .select("_id code name isAdded accountId userId createdAt updatedAt");
 
-    // cache for 15 seconds
-    await setRedisJSON(REDIS_USER_KEY(userId), items, 15);
+    await setRedisJSON(REDIS_ACCOUNT_KEY(accountId), items, 30);
 
-    return items;
+    return { data: items, message: "Watchlist fetched" };
   },
 
-  async getOne(userId, codeRaw) {
+  async getOne(userId, accountIdRaw, codeRaw) {
+    const accountId = normalizeAccountId(accountIdRaw);
     const code = normalizeCode(codeRaw);
-    if (!code) return { error: { status: 400, message: 'Code is required' } };
 
-    const item = await WatchlistItem.findOne({ userId, code }).select(
-      '_id code name isAdded isEnable createdAt updatedAt'
-    );
+    if (!accountId) return { error: { status: 400, message: "AccountId is required" } };
+    if (!code) return { error: { status: 400, message: "Code is required" } };
+
+    const instrument = await InstrumentModel.findOne({ code }).select("isActive");
+
+    if (!instrument) {
+      return { error: { status: 404, message: "Instrument not found" } };
+    }
+
+    if (instrument.isActive !== true) {
+      return { error: { status: 400, message: "Instrument is not active" } };
+    }
+
+    const item = await WatchlistItem.findOne({
+      userId,
+      accountId,
+      code,
+      isAdded: true,
+    }).select("_id code name isAdded accountId userId createdAt updatedAt");
 
     if (!item) {
-      return { error: { status: 404, message: 'Item not found in watchlist' } };
+      return { error: { status: 404, message: "Item not found in watchlist" } };
     }
 
     return { data: item };
   },
 
-  async addUserItem(userId, payload) {
+  async addUserItem(userId, accountIdRaw, payload) {
+    const accountId = normalizeAccountId(accountIdRaw);
     const code = normalizeCode(payload?.code);
-    const name = normalizeName(payload?.name);
 
-    if (!code) return { error: { status: 400, message: 'Code is required' } };
-    if (!name) return { error: { status: 400, message: 'Name is required' } };
-
-    if (code.length > 30) return { error: { status: 400, message: 'Code is too long' } };
-    if (name.length > 60) return { error: { status: 400, message: 'Name is too long' } };
+    if (!accountId) return { error: { status: 400, message: "AccountId is required" } };
+    if (!code) return { error: { status: 400, message: "Code is required" } };
+    if (code.length > 30)
+      return { error: { status: 400, message: "Code is too long" } };
 
     try {
+      const instrument = await InstrumentModel.findOne({ code }).select(
+        "code name isActive"
+      );
+
+      if (!instrument) {
+        return { error: { status: 404, message: "Instrument not found" } };
+      }
+
+      if (instrument.isActive !== true) {
+        return { error: { status: 400, message: "Instrument is not active" } };
+      }
+
+      const instrumentName = normalizeName(instrument.name);
+
+      if (!instrumentName) {
+        return { error: { status: 400, message: "Instrument name is missing" } };
+      }
+
+      if (instrumentName.length > 60) {
+        return { error: { status: 400, message: "Name is too long" } };
+      }
+
+      const existing = await WatchlistItem.findOne({
+        userId,
+        accountId,
+        code,
+      }).select("_id code name isAdded accountId userId createdAt updatedAt");
+
+      if (existing) {
+        if (existing.isAdded === true) {
+          return {
+            error: {
+              status: 409,
+              message: "This instrument is already added in your watchlist",
+            },
+          };
+        }
+
+        existing.isAdded = true;
+        existing.name = instrumentName;
+
+        await existing.save();
+
+        await delRedis(REDIS_ACCOUNT_KEY(accountId));
+
+        return {
+          data: existing,
+          message: "Instrument added back to your watchlist",
+        };
+      }
+
       const created = await WatchlistItem.create({
         userId,
+        accountId,
         code,
-        name,
+        name: instrumentName,
         isAdded: true,
-        isEnable: true,
       });
 
-      await delRedis(REDIS_USER_KEY(userId));
+      await delRedis(REDIS_ACCOUNT_KEY(accountId));
 
       return {
         data: {
@@ -217,57 +431,179 @@ export const watchlistService = {
           code: created.code,
           name: created.name,
           isAdded: created.isAdded,
-          isEnable: created.isEnable,
+          accountId: created.accountId,
+          userId: created.userId,
           createdAt: created.createdAt,
           updatedAt: created.updatedAt,
         },
+        message: "Instrument added to watchlist",
       };
     } catch (error) {
-      console.log('WATCHLIST ADD ERROR =>', error);
-
-      // duplicate key
-      if (error?.code === 11000) {
-        const existing = await WatchlistItem.findOne({ userId, code }).select(
-          '_id code name isAdded isEnable createdAt updatedAt'
-        );
-
-        if (existing) {
-          // re-enable if disabled/removed
-          if (existing.isAdded === false || existing.isEnable === false || existing.name !== name) {
-            existing.isAdded = true;
-            existing.isEnable = true;
-            existing.name = name;
-            await existing.save();
-          }
-
-          await delRedis(REDIS_USER_KEY(userId));
-
-          return { data: existing, alreadyExists: true };
-        }
-
-        return { error: { status: 409, message: 'Already in watchlist' } };
+      if (
+        error &&
+        typeof error === "object" &&
+        "code" in error &&
+        error.code === 11000
+      ) {
+        return {
+          error: {
+            status: 409,
+            message: "This instrument is already added in your watchlist",
+          },
+        };
       }
 
-      return { error: { status: 500, message: 'Failed to add watchlist item' } };
+      return {
+        error: { status: 500, message: "Failed to add watchlist item" },
+      };
     }
   },
 
-  async removeUserItem(userId, codeRaw) {
+  async removeUserItem(userId, accountIdRaw, codeRaw) {
+    const accountId = normalizeAccountId(accountIdRaw);
     const code = normalizeCode(codeRaw);
-    if (!code) return { error: { status: 400, message: 'Code is required' } };
+
+    if (!accountId) return { error: { status: 400, message: "AccountId is required" } };
+    if (!code) return { error: { status: 400, message: "Code is required" } };
 
     const updated = await WatchlistItem.findOneAndUpdate(
-      { userId, code },
+      { userId, accountId, code, isAdded: true },
       { $set: { isAdded: false } },
       { new: true }
-    ).select('_id code name isAdded isEnable createdAt updatedAt');
+    ).select("_id code name isAdded accountId userId createdAt updatedAt");
 
     if (!updated) {
-      return { error: { status: 404, message: 'Item not found in watchlist' } };
+      return { error: { status: 404, message: "Item not found in watchlist" } };
     }
 
-    await delRedis(REDIS_USER_KEY(userId));
+    await delRedis(REDIS_ACCOUNT_KEY(accountId));
 
-    return { data: updated };
+    return { data: updated, message: "Instrument removed from watchlist" };
   },
+
+async getSegmentInstrumentsWithStatus(userId, accountIdRaw, segmentRaw, limit) {
+  const accountId = normalizeAccountId(accountIdRaw);
+  const segment = String(segmentRaw || "").trim().toUpperCase();
+
+  if (!accountId) {
+    return { error: { status: 400, message: "AccountId is required" } };
+  }
+
+  if (!segment) {
+    return { error: { status: 400, message: "Segment is required" } };
+  }
+
+  //  Cache key (unique per user + account + segment + limit)
+  const cacheKey = `account:segment:watchlist:v1:${String(userId)}:${String(
+    accountId
+  )}:${String(segment)}:${String(limit)}`;
+
+  //  Return fast from Redis
+  const cached = await getRedisJSON(cacheKey);
+  if (Array.isArray(cached)) {
+    return { data: cached };
+  }
+
+  //  fetch instruments segment wise (only active)
+  const instruments = await InstrumentModel.find({
+    segment: segment,
+    isActive: true,
+  })
+    .sort({ createdAt: -1, _id: -1 })
+    .limit(limit)
+    .select("code name segment isActive");
+
+  if (!Array.isArray(instruments) || instruments.length === 0) {
+    await setRedisJSON(cacheKey, [], 30);
+    return { data: [] };
+  }
+
+  const codes = instruments.map((x) => normalizeCode(x.code)).filter(Boolean);
+
+  //  user watchlist items for same segment instruments
+  const userItems = await WatchlistItem.find({
+    userId,
+    accountId,
+    code: { $in: codes },
+    isAdded: true,
+  }).select("code");
+
+  const userCodeSet = new Set(
+    userItems.map((x) => normalizeCode(x.code)).filter(Boolean)
+  );
+
+  const finalList = instruments.map((inst) => {
+    const code = normalizeCode(inst.code);
+    const name = normalizeName(inst.name);
+
+    return {
+      code,
+      name,
+      segment: String(inst.segment || ""),
+      isAdded: userCodeSet.has(code),
+    };
+  });
+
+  //  Save in Redis (30 sec cache)
+  await setRedisJSON(cacheKey, finalList, 30);
+
+  return { data: finalList };
+},
+async searchInstrumentsOnly(qRaw, segmentRaw, limit) {
+  const q = String(qRaw || "").trim();
+  const segment = String(segmentRaw || "").trim().toUpperCase();
+
+  if (!q) {
+    return { error: { status: 400, message: "Search query (q) is required" } };
+  }
+
+  if (q.length > 50) {
+    return { error: { status: 400, message: "Search query is too long" } };
+  }
+
+  //  Redis cache key (global, best for 10k users)
+  const cacheKey = `instrument:search:only:v1:${String(
+    segment || "ALL"
+  )}:${String(q.toUpperCase())}:${String(limit)}`;
+
+  const cached = await getRedisJSON(cacheKey);
+  if (Array.isArray(cached)) {
+    return { data: cached };
+  }
+
+  const filter = {
+    isActive: true,
+    $or: [
+      { code: { $regex: q, $options: "i" } },
+      { name: { $regex: q, $options: "i" } },
+    ],
+  };
+
+  if (segment) {
+    filter.segment = segment;
+  }
+
+  const instruments = await InstrumentModel.find(filter)
+    .sort({ _id: -1 })
+    .limit(limit)
+    .select("code name segment")
+    .lean();
+
+  if (!Array.isArray(instruments) || instruments.length === 0) {
+    await setRedisJSON(cacheKey, [], 20);
+    return { data: [] };
+  }
+
+  const finalList = instruments.map((inst) => ({
+    code: normalizeCode(inst.code),
+    name: normalizeName(inst.name),
+    segment: String(inst.segment || ""),
+  }));
+
+  await setRedisJSON(cacheKey, finalList, 20);
+
+  return { data: finalList };
+},
+
+
 };
