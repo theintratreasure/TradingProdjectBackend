@@ -2,7 +2,7 @@ import mongoose from "mongoose";
 
 const AccountSchema = new mongoose.Schema(
   {
-    // 🔹 USER
+    //  USER
     user_id: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -10,7 +10,7 @@ const AccountSchema = new mongoose.Schema(
       index: true
     },
 
-    // 🔹 PLAN REFERENCE (ADMIN / AUDIT)
+    //  PLAN REFERENCE (ADMIN / AUDIT)
     account_plan_id: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "AccountPlan",
@@ -18,7 +18,7 @@ const AccountSchema = new mongoose.Schema(
       index: true
     },
 
-    // 🔹 ACCOUNT IDENTIFICATION
+    //  ACCOUNT IDENTIFICATION
     account_number: {
       type: String,
       required: true,
@@ -33,7 +33,7 @@ const AccountSchema = new mongoose.Schema(
       index: true
     },
 
-    // 🔹 PLAN SNAPSHOT (FAST READ – NO POPULATE)
+    //  PLAN SNAPSHOT (FAST READ – NO POPULATE)
     plan_name: {
       type: String,
       required: true, // STANDARD / ECN / RAW etc
@@ -66,7 +66,7 @@ const AccountSchema = new mongoose.Schema(
       default: true
     },
 
-    // 🔹 FINANCIALS
+    //  FINANCIALS
     balance: {
       type: Number,
       default: 0
@@ -82,14 +82,14 @@ const AccountSchema = new mongoose.Schema(
       required: true // USD / INR / EUR etc
     },
 
-    // 🔹 FIRST DEPOSIT FLAG
+    //  FIRST DEPOSIT FLAG
     first_deposit: {
       type: Boolean,
       default: false,
       index: true
     },
 
-    // 🔹 STATUS
+    //  STATUS
     status: {
       type: String,
       enum: ["active", "disabled"],
@@ -103,7 +103,7 @@ const AccountSchema = new mongoose.Schema(
   }
 );
 
-// 🔹 COMPOSITE INDEXES
+//  COMPOSITE INDEXES
 AccountSchema.index({ user_id: 1, account_type: 1 });
 AccountSchema.index({ user_id: 1, status: 1 });
 

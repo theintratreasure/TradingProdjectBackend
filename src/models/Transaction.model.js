@@ -1,82 +1,84 @@
-import mongoose from 'mongoose';
+import mongoose from "mongoose";
 
 const TransactionSchema = new mongoose.Schema(
   {
     //  USER
     user: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
+      ref: "User",
       required: true,
-      index: true
+      index: true,
     },
     //  ACCOUNT (TRADING ACCOUNT)
     account: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'Account',
+      ref: "Account",
       required: true,
-      index: true
+      index: true,
     },
     //  TRANSACTION TYPE
     type: {
       type: String,
       enum: [
-        'DEPOSIT',
-        'WITHDRAWAL',
-        'TRADE_PROFIT',
-        'TRADE_LOSS',
-        'BONUS',
-        'REFERRAL',
-        'ADJUSTMENT'
+        "DEPOSIT",
+        "WITHDRAWAL",
+        "TRADE_PROFIT",
+        "TRADE_LOSS",
+        "BONUS",
+        "REFERRAL",
+        "ADJUSTMENT",
+        "INTERNAL_TRANSFER_OUT",
+        "INTERNAL_TRANSFER_IN",
       ],
       required: true,
-      index: true
+      index: true,
     },
     //  AMOUNT (ALWAYS POSITIVE)
     amount: {
       type: Number,
       required: true,
-      min: 0
+      min: 0,
     },
     //  BALANCE AFTER THIS TRANSACTION (SNAPSHOT)
     balanceAfter: {
       type: Number,
       required: true,
-      min: 0
+      min: 0,
     },
     //  TRANSACTION STATUS
     status: {
       type: String,
-      enum: ['PENDING', 'SUCCESS', 'FAILED'],
-      default: 'SUCCESS',
-      index: true
+      enum: ["PENDING", "SUCCESS", "FAILED"],
+      default: "SUCCESS",
+      index: true,
     },
     //  REFERENCE TYPE (FOR DEBUGGING & AUDIT)
     referenceType: {
       type: String,
-      enum: ['DEPOSIT', 'WITHDRAWAL', 'ORDER', 'SYSTEM'],
-      index: true
+      enum: ["DEPOSIT", "WITHDRAWAL", "ORDER", "SYSTEM",'INTERNAL_TRANSFER'],
+      index: true,
     },
     //  REFERENCE ID (DEPOSIT ID / WITHDRAW ID / ORDER ID)
     referenceId: {
       type: mongoose.Schema.Types.ObjectId,
-      index: true
+      index: true,
     },
     //  WHO CREATED THIS (ADMIN / SYSTEM)
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'User'
+      ref: "User",
     },
 
     //  OPTIONAL REMARK / NOTE
     remark: {
       type: String,
       trim: true,
-      default: ''
-    }
+      default: "",
+    },
   },
   {
-    timestamps: true
-  }
+    timestamps: true,
+  },
 );
 
 /*  HIGH-SCALE PERFORMANCE INDEXES */
@@ -86,4 +88,4 @@ TransactionSchema.index({ user: 1, status: 1, createdAt: -1 });
 TransactionSchema.index({ type: 1, createdAt: -1 });
 TransactionSchema.index({ referenceType: 1, referenceId: 1 });
 
-export default mongoose.model('Transaction', TransactionSchema);
+export default mongoose.model("Transaction", TransactionSchema);
