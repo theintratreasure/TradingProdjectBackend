@@ -5,6 +5,7 @@ import Account from '../models/Account.model.js';
 import AccountPlan from '../models/AccountPlan.model.js';
 import DepositModel from '../models/Deposit.model.js';
 import Transaction from '../models/Transaction.model.js';
+import redis from '../config/redis.js';
 
 export async function createDepositService({
   userId,
@@ -186,11 +187,11 @@ export async function adminGetAllDepositsService({
 }) {
   const query = {};
 
-  if (filters.status) {
+  if (filters?.status) {
     query.status = filters.status;
   }
 
-  if (filters.fromDate || filters.toDate) {
+  if (filters?.fromDate || filters?.toDate) {
     query.createdAt = {};
     if (filters.fromDate) {
       query.createdAt.$gte = new Date(filters.fromDate);
@@ -202,8 +203,26 @@ export async function adminGetAllDepositsService({
 
   const skip = (page - 1) * limit;
 
+  /* 🔴 REDIS CACHE KEY */
+  const cacheKey = `admin:deposits:${page}:${limit}:${JSON.stringify(filters)}`;
+
+  /* 🔴 TRY CACHE FIRST */
+  const cached = await redis.get(cacheKey);
+  if (cached) {
+    return JSON.parse(cached);
+  }
+
+  /* 🔴 DB QUERY */
   const [records, total] = await Promise.all([
     Deposit.find(query)
+      .populate({
+        path: "user",
+        select: "name email"
+      })
+      .populate({
+        path: "account",
+        select: "account_number plan_name"
+      })
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
@@ -212,7 +231,12 @@ export async function adminGetAllDepositsService({
     Deposit.countDocuments(query)
   ]);
 
-  return { records, total };
+  const result = { records, total };
+
+  /* 🔴 SAVE TO REDIS (60 sec) */
+  await redis.setex(cacheKey, 60, JSON.stringify(result));
+
+  return result;
 }
 
 
