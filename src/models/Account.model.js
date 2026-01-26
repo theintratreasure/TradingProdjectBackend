@@ -7,7 +7,7 @@ const AccountSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
-      index: true
+      index: true,
     },
 
     //  PLAN REFERENCE (ADMIN / AUDIT)
@@ -15,7 +15,7 @@ const AccountSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "AccountPlan",
       required: true,
-      index: true
+      index: true,
     },
 
     //  ACCOUNT IDENTIFICATION
@@ -23,70 +23,79 @@ const AccountSchema = new mongoose.Schema(
       type: String,
       required: true,
       unique: true,
-      index: true
+      index: true,
     },
 
     account_type: {
       type: String,
       enum: ["demo", "live"],
       required: true,
-      index: true
+      index: true,
     },
 
     //  PLAN SNAPSHOT (FAST READ – NO POPULATE)
     plan_name: {
       type: String,
       required: true, // STANDARD / ECN / RAW etc
-      index: true
+      index: true,
     },
 
     leverage: {
       type: Number,
-      required: true // snapshot from plan
+      required: true, // snapshot from plan
     },
 
     spread_type: {
       type: String,
       enum: ["FIXED", "FLOATING"],
-      required: true
+      required: true,
     },
 
     spread_pips: {
       type: Number,
-      required: true
+      required: true,
     },
 
     commission_per_lot: {
       type: Number,
-      default: 0
+      default: 0,
     },
 
     swap_enabled: {
       type: Boolean,
-      default: true
+      default: true,
     },
 
     //  FINANCIALS
     balance: {
       type: Number,
-      default: 0
+      default: 0,
+      min: 0,
+    },
+
+    // LOCKED FUNDS FOR PENDING WITHDRAWALS
+    hold_balance: {
+      type: Number,
+      default: 0,
+      min: 0,
     },
 
     equity: {
       type: Number,
-      default: 0
+      default: 0,
+      min: 0,
     },
 
     currency: {
       type: String,
-      required: true // USD / INR / EUR etc
+      required: true, // USD / INR / EUR etc
     },
 
     //  FIRST DEPOSIT FLAG
     first_deposit: {
       type: Boolean,
       default: false,
-      index: true
+      index: true,
     },
 
     //  STATUS
@@ -94,13 +103,13 @@ const AccountSchema = new mongoose.Schema(
       type: String,
       enum: ["active", "disabled"],
       default: "active",
-      index: true
-    }
+      index: true,
+    },
   },
   {
     timestamps: true,
-    versionKey: false
-  }
+    versionKey: false,
+  },
 );
 
 //  COMPOSITE INDEXES
