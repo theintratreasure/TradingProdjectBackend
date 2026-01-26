@@ -45,7 +45,7 @@ const AccountPlanSchema = new mongoose.Schema(
 
     is_demo_allowed: {
       type: Boolean,
-      default: true
+      default: false
     },
 
     spread_type: {

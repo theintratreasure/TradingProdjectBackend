@@ -4,6 +4,8 @@ import Account from "../models/Account.model.js";
 import Transaction from "../models/Transaction.model.js";
 import User from "../models/User.model.js";
 
+/* -------------------- HELPERS -------------------- */
+
 const parsePagination = (query) => {
   const pageRaw = Number(query.page);
   const limitRaw = Number(query.limit);
@@ -98,8 +100,10 @@ const validatePayout = ({ method, payout }) => {
   return { ok: true, message: "OK" };
 };
 
+/* -------------------- USER: CREATE WITHDRAWAL -------------------- */
 /**
  * USER: CREATE WITHDRAWAL REQUEST
+ * ✅ KYC VERIFIED REQUIRED
  * ✅ DEDUCT BALANCE ON REQUEST
  * ✅ ADD HOLD_BALANCE ON REQUEST
  * ✅ ONLY 1 PENDING WITHDRAWAL ALLOWED PER ACCOUNT
@@ -141,6 +145,7 @@ export const createWithdrawal = async ({ userId, ipAddress, payload }) => {
         throw new Error("KYC not verified. Please complete KYC to withdraw");
       }
 
+      // ✅ ACCOUNT CHECK
       const account = await Account.findOne({ _id: accountId, user_id: userId }).session(session);
 
       if (!account) {
@@ -159,7 +164,7 @@ export const createWithdrawal = async ({ userId, ipAddress, payload }) => {
         throw new Error("Withdrawal allowed only after first approved deposit");
       }
 
-      // ✅ Check only 1 pending withdrawal per account
+      // ✅ only 1 pending withdrawal per account
       const pending = await Withdrawal.findOne({
         user: userId,
         account: account._id,
@@ -172,7 +177,7 @@ export const createWithdrawal = async ({ userId, ipAddress, payload }) => {
 
       const holdBalance = typeof account.hold_balance === "number" ? account.hold_balance : 0;
 
-      // ✅ Balance must be enough (because we deduct now)
+      // ✅ balance check (because we deduct now)
       if (amount > account.balance) {
         throw new Error("Insufficient balance");
       }
@@ -184,6 +189,9 @@ export const createWithdrawal = async ({ userId, ipAddress, payload }) => {
       if (account.balance < 0) {
         throw new Error("Insufficient balance");
       }
+
+      // ✅ FIX EQUITY (recommended: equity = balance)
+      account.equity = account.balance;
 
       await account.save({ session });
 
@@ -212,9 +220,6 @@ export const createWithdrawal = async ({ userId, ipAddress, payload }) => {
 
       createdWithdrawal = withdrawalDocs[0];
 
-      // ✅ Now balance is already reduced
-      const balanceAfter = account.balance;
-
       await Transaction.create(
         [
           {
@@ -222,7 +227,7 @@ export const createWithdrawal = async ({ userId, ipAddress, payload }) => {
             account: account._id,
             type: "WITHDRAWAL",
             amount,
-            balanceAfter,
+            balanceAfter: account.balance,
             status: "PENDING",
             referenceType: "WITHDRAWAL",
             referenceId: createdWithdrawal._id,
@@ -251,9 +256,8 @@ export const createWithdrawal = async ({ userId, ipAddress, payload }) => {
   }
 };
 
-/**
- * USER: LIST WITHDRAWALS (PAGINATION + FILTERS)
- */
+/* -------------------- USER: LIST WITHDRAWALS -------------------- */
+
 export const listUserWithdrawals = async ({ userId, query }) => {
   const { page, limit, skip } = parsePagination(query);
 
@@ -267,7 +271,7 @@ export const listUserWithdrawals = async ({ userId, query }) => {
 
   const [items, total] = await Promise.all([
     Withdrawal.find(filter)
-      .select("-payout.account_number") // hide full bank account number
+      .select("-payout.account_number")
       .sort(sort)
       .skip(skip)
       .limit(limit)
@@ -290,9 +294,8 @@ export const listUserWithdrawals = async ({ userId, query }) => {
   };
 };
 
-/**
- * ADMIN: LIST ALL WITHDRAWALS (PAGINATION + FILTERS)
- */
+/* -------------------- ADMIN: LIST ALL WITHDRAWALS -------------------- */
+
 export const listAdminWithdrawals = async ({ query }) => {
   const { page, limit, skip } = parsePagination(query);
 
@@ -330,6 +333,7 @@ export const listAdminWithdrawals = async ({ query }) => {
   };
 };
 
+/* -------------------- ADMIN: APPROVE WITHDRAWAL -------------------- */
 /**
  * ADMIN: APPROVE WITHDRAWAL
  * ✅ ONLY HOLD_BALANCE WILL DECREASE
@@ -375,7 +379,7 @@ export const adminApproveWithdrawal = async ({ adminId, withdrawalId }) => {
         throw new Error("Hold balance mismatch. Cannot approve withdrawal");
       }
 
-      // ✅ Release from hold (payout success)
+      // ✅ payout success, remove from hold
       account.hold_balance = holdBalance - withdrawal.amount;
 
       if (account.hold_balance < 0) {
@@ -386,7 +390,6 @@ export const adminApproveWithdrawal = async ({ adminId, withdrawalId }) => {
 
       await account.save({ session });
 
-      // ✅ COMPLETE WITHDRAWAL
       withdrawal.status = "COMPLETED";
       withdrawal.actionBy = adminId;
       withdrawal.actionAt = new Date();
@@ -394,7 +397,6 @@ export const adminApproveWithdrawal = async ({ adminId, withdrawalId }) => {
 
       updatedWithdrawal = await withdrawal.save({ session });
 
-      // ✅ UPDATE TRANSACTION
       await Transaction.findOneAndUpdate(
         {
           referenceType: "WITHDRAWAL",
@@ -430,6 +432,7 @@ export const adminApproveWithdrawal = async ({ adminId, withdrawalId }) => {
   }
 };
 
+/* -------------------- ADMIN: REJECT WITHDRAWAL -------------------- */
 /**
  * ADMIN: REJECT WITHDRAWAL
  * ✅ REFUND BALANCE BACK
@@ -480,7 +483,7 @@ export const adminRejectWithdrawal = async ({ adminId, withdrawalId, rejectionRe
         throw new Error("Hold balance mismatch. Cannot reject withdrawal");
       }
 
-      // ✅ REFUND BALANCE + RELEASE HOLD
+      // ✅ refund money back + remove from hold
       account.balance = account.balance + withdrawal.amount;
       account.hold_balance = holdBalance - withdrawal.amount;
 
@@ -492,7 +495,6 @@ export const adminRejectWithdrawal = async ({ adminId, withdrawalId, rejectionRe
 
       await account.save({ session });
 
-      // ✅ REJECT WITHDRAWAL
       withdrawal.status = "REJECTED";
       withdrawal.rejectionReason = reason;
       withdrawal.actionBy = adminId;
@@ -500,7 +502,6 @@ export const adminRejectWithdrawal = async ({ adminId, withdrawalId, rejectionRe
 
       updatedWithdrawal = await withdrawal.save({ session });
 
-      // ✅ UPDATE TRANSACTION
       await Transaction.findOneAndUpdate(
         {
           referenceType: "WITHDRAWAL",
