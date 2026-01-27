@@ -95,3 +95,31 @@ export function sendResetPasswordMail(email, resetLink) {
     html
   });
 }
+
+/* ======================================================
+  create account mail 
+====================================================== */
+export function sendAccountCreatedMail({
+  email,
+  accountNumber,
+  accountType,
+  planName,
+  tradePassword,
+  watchPassword,
+}) {
+  const html = loadTemplate("account-created.html", {
+    APP_NAME: process.env.APP_NAME || "Trading App",
+    ACCOUNT_NUMBER: accountNumber,
+    ACCOUNT_TYPE: accountType.toUpperCase(),
+    PLAN_NAME: planName,
+    TRADE_PASSWORD: tradePassword,
+    WATCH_PASSWORD: watchPassword,
+    YEAR: new Date().getFullYear(),
+  });
+
+  return sendMail({
+    to: email,
+    subject: "Your Trading Account is Ready",
+    html,
+  });
+}

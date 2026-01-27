@@ -1,13 +1,19 @@
-import dotenv from "dotenv";
+// ✅ MUST BE FIRST LINE (ESM + dotenv FIX)
+import "dotenv/config";
+
 import http from "node:http";
 import app from "./app.js";
 import { connectDB } from "./config/database.js";
 import { startMarketCron } from "./jobs/market.cron.js";
 // import { attachMarketWS } from "./ws/market.js";
 
-dotenv.config();
-
 const PORT = Number(process.env.PORT || 4000);
+
+// optional sanity check (remove later if you want)
+console.log("ENV CHECK:", {
+  JWT_SECRET: process.env.JWT_SECRET,
+  ACCOUNT_JWT_SECRET: process.env.ACCOUNT_JWT_SECRET,
+});
 
 async function start() {
   await connectDB();
@@ -18,7 +24,7 @@ async function start() {
   server.keepAliveTimeout = 65000;
   server.headersTimeout = 66000;
 
-  // attach websocket
+  // attach websocket if needed
   // attachMarketWS(server);
 
   server.listen(PORT, () => {

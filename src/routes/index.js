@@ -17,7 +17,9 @@ import watchlistRoutes from './v1/watchlist.routes.js';
 import marketRoutes from './v1/market.routes.js';
 import internalTransferRoutes from './v1/internalTransfer.routes.js';
 import withdrawalRoutes from "./v1/withdrawal.routes.js";
+import accountAuthRoutes from "./v1/accountAuth.routes.js";
 const router = Router();
+
 
 router.use("/v1/health", healthRoutes);
 router.use("/v1/auth", authRoutes);
@@ -37,4 +39,5 @@ router.use('/v1/watchlist', watchlistRoutes);
 router.use('/v1/market', marketRoutes);
 router.use('/v1/internal-transfer', internalTransferRoutes);
 router.use("/v1/withdrawals", withdrawalRoutes);
+router.use("/v1/account-auth", accountAuthRoutes);
 export default router;

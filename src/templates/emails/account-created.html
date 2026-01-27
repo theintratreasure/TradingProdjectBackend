@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>{{APP_NAME}} - Account Created</title>
+  </head>
+  <body style="font-family: Arial, sans-serif; background:#f6f6f6; padding:20px;">
+    <div style="max-width:600px; margin:auto; background:#ffffff; padding:20px;">
+      <h2>Welcome to {{APP_NAME}}</h2>
+
+      <p>Your trading account has been created successfully.</p>
+
+      <h3>Account Details</h3>
+      <ul>
+        <li><strong>Account Number:</strong> {{ACCOUNT_NUMBER}}</li>
+        <li><strong>Account Type:</strong> {{ACCOUNT_TYPE}}</li>
+        <li><strong>Plan:</strong> {{PLAN_NAME}}</li>
+      </ul>
+
+      <h3>Login Credentials</h3>
+      <p><strong>Trade Password:</strong> {{TRADE_PASSWORD}}</p>
+      <p><strong>Watch Password:</strong> {{WATCH_PASSWORD}}</p>
+
+      <p style="color:#b00;">
+        ⚠️ Please save these passwords securely.  
+        You will not be able to view them again.
+      </p>
+
+      <p>Happy Trading,<br />{{APP_NAME}} Team</p>
+
+      <hr />
+      <small>© {{YEAR}} {{APP_NAME}}</small>
+    </div>
+  </body>
+</html>

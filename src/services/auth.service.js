@@ -176,11 +176,11 @@ export async function verifyEmailService(token) {
 
       if (existingDemo > 0) return;
 
-      // ✅ get default demo plan id from redis first
+      //  get default demo plan id from redis first
       const demoPlanId = await getDefaultDemoPlanId();
       if (!demoPlanId) return;
 
-      // ✅ create demo account using your createAccount() service
+      //  create demo account using your createAccount() service
       await createAccount({
         userId: auth.user_id,
         account_plan_id: demoPlanId,
