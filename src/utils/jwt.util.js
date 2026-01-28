@@ -4,8 +4,8 @@ const ACCESS_TOKEN_TTL = '12h';
 const ACCOUNT_JWT_SECRET = process.env.ACCOUNT_JWT_SECRET;
 const ACCOUNT_JWT_EXPIRE = "15m";
 
-console.log("JWT_SECRET:", process.env.JWT_SECRET);
-console.log("ACCOUNT_JWT_SECRET:", process.env.ACCOUNT_JWT_SECRET);
+// console.log("JWT_SECRET:", process.env.JWT_SECRET);
+// console.log("ACCOUNT_JWT_SECRET:", process.env.ACCOUNT_JWT_SECRET);
 
 export function signAccessToken(user) {
   return jwt.sign(

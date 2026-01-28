@@ -18,6 +18,7 @@ import marketRoutes from './v1/market.routes.js';
 import internalTransferRoutes from './v1/internalTransfer.routes.js';
 import withdrawalRoutes from "./v1/withdrawal.routes.js";
 import accountAuthRoutes from "./v1/accountAuth.routes.js";
+import tradeRoutes from "./v1/trade.routes.js";
 const router = Router();
 
 
@@ -40,4 +41,6 @@ router.use('/v1/market', marketRoutes);
 router.use('/v1/internal-transfer', internalTransferRoutes);
 router.use("/v1/withdrawals", withdrawalRoutes);
 router.use("/v1/account-auth", accountAuthRoutes);
+router.use("/v1/trade", tradeRoutes);
+
 export default router;
