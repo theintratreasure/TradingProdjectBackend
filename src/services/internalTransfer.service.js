@@ -354,7 +354,7 @@ export async function getUserInternalTransfersService({
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(safeLimit)
-      .populate('account', 'accountNo account_type status')
+      .populate('account', 'accountNo account_type status account_number')
       .lean(),
 
     Transaction.countDocuments(filter)
