@@ -272,6 +272,7 @@ export const listUserWithdrawals = async ({ userId, query }) => {
   const [items, total] = await Promise.all([
     Withdrawal.find(filter)
       .select("-payout.account_number")
+      .populate("account", "account_number ")
       .sort(sort)
       .skip(skip)
       .limit(limit)

@@ -134,7 +134,7 @@ export async function getUserDepositsService({
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(safeLimit)
-      .populate('account', 'accountNo environment')
+      .populate('account', 'account_number')
       .lean(),
 
     DepositModel.countDocuments(filter)
