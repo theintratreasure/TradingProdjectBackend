@@ -65,7 +65,7 @@ export async function accountLoginService({
     sessionType,
   };
 
-  const accessToken = signAccountToken(tokenPayload);
+  const tradeToken = signAccountToken(tokenPayload);
 
   await AccountAuth.updateOne(
     { _id: auth._id },
@@ -75,7 +75,7 @@ export async function accountLoginService({
         last_login_at: new Date(),
         last_login_ip: ip || null,
         last_login_device: device || null,
-        access_token_hash: sha256(accessToken),
+        access_token_hash: sha256(tradeToken),
         access_token_expires_at: new Date(
           Date.now() + 15 * 60 * 1000
         ),
@@ -84,13 +84,13 @@ export async function accountLoginService({
   );
 
   return {
-    accessToken,
+    tradeToken,
     sessionType,
+    accountId: account._id.toString(),
     account_number: account.account_number,
     account_type: account.account_type,
   };
 }
-
 /* =====================================================
    RESET TRADE PASSWORD (USER SETS PASSWORD)
 ===================================================== */
