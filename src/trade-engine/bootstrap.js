@@ -3,15 +3,14 @@ import { Engine } from "./Engine.js";
 
 export const tradeEngine = new Engine();
 
-/**
- * Load all trading state into RAM (ONCE at startup)
- */
 export async function bootstrapEngine({ accounts, symbols }) {
   for (const acc of accounts) {
     tradeEngine.loadAccount({
-      accountId: String(acc._id),   // 🔥 FIX: Mongo _id
+      accountId: String(acc._id),
       balance: acc.balance,
       leverage: acc.leverage,
+      userId: String(acc.user_id),   // ✅ REQUIRED FIX
+      lastIp: acc.lastIp || "SYSTEM",
     });
   }
 

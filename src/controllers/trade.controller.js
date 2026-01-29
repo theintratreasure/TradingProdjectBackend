@@ -1,6 +1,24 @@
 import { tradeEngine } from "../trade-engine/bootstrap.js";
 import Account from "../models/Account.model.js";
 
+/* =========================
+   COMMON: ACCOUNT OWNERSHIP
+========================= */
+async function verifyAccountOwnership(userId, accountId) {
+  const exists = await Account.exists({
+    _id: accountId,
+    user_id: userId,
+    status: "active",
+  });
+
+  if (!exists) {
+    throw new Error("Account does not belong to user");
+  }
+}
+
+/* =========================
+   MARKET ORDER (BUY / SELL)
+========================= */
 export async function placeMarketOrderController(req, res) {
   try {
     const userId = String(req.user._id);
@@ -28,22 +46,10 @@ export async function placeMarketOrderController(req, res) {
       });
     }
 
-    // 🔐 SECURITY: verify account belongs to logged-in user
-    const ownsAccount = await Account.exists({
-      _id: accountId,
-      user_id: userId,
-      status: "active",
-    });
-
-    if (!ownsAccount) {
-      return res.status(403).json({
-        status: "error",
-        message: "Account does not belong to user",
-      });
-    }
+    await verifyAccountOwnership(userId, accountId);
 
     const position = tradeEngine.placeMarketOrder({
-      accountId: String(accountId), // ✅ FIX
+      accountId: String(accountId),
       symbol: String(symbol).toUpperCase(),
       side,
       volume: Number(volume),
@@ -55,11 +61,11 @@ export async function placeMarketOrderController(req, res) {
       status: "success",
       data: {
         positionId: position.positionId,
-        accountId,
+        accountId: position.accountId,
         symbol: position.symbol,
         side: position.side,
-        openPrice: position.openPrice,
         volume: position.volume,
+        openPrice: position.openPrice,
       },
     });
   } catch (err) {
@@ -69,8 +75,13 @@ export async function placeMarketOrderController(req, res) {
     });
   }
 }
-export const closePosition = (req, res) => {
+
+/* =========================
+   CLOSE OPEN POSITION
+========================= */
+export async function closePosition(req, res) {
   try {
+    const userId = String(req.user._id);
     const { accountId, positionId } = req.body;
 
     if (!accountId || !positionId) {
@@ -80,9 +91,11 @@ export const closePosition = (req, res) => {
       });
     }
 
+    await verifyAccountOwnership(userId, accountId);
+
     const result = tradeEngine.squareOffPosition({
-      accountId,
-      positionId,
+      accountId: String(accountId),
+      positionId: String(positionId),
       reason: "MANUAL_CLOSE",
     });
 
@@ -96,4 +109,169 @@ export const closePosition = (req, res) => {
       message: err.message,
     });
   }
-};
+}
+
+/* =========================
+   PLACE PENDING ORDER
+   (BUY LIMIT / SELL LIMIT /
+    BUY STOP / SELL STOP)
+========================= */
+export async function placePendingOrderController(req, res) {
+  try {
+    const userId = String(req.user._id);
+
+    const {
+      accountId,
+      symbol,
+      side,
+      orderType,
+      price,
+      volume,
+      stopLoss,
+      takeProfit,
+    } = req.body;
+
+    if (
+      !accountId ||
+      !symbol ||
+      !side ||
+      !orderType ||
+      !price ||
+      !volume
+    ) {
+      return res.status(400).json({
+        status: "error",
+        message: "Missing required fields",
+      });
+    }
+
+    await verifyAccountOwnership(userId, accountId);
+
+    const order = tradeEngine.placePendingOrder({
+      userId: req.user._id, 
+      accountId: String(accountId),
+      symbol: String(symbol).toUpperCase(),
+      side,
+      orderType,
+      price: Number(price),
+      volume: Number(volume),
+      stopLoss: typeof stopLoss === "number" ? stopLoss : null,
+      takeProfit: typeof takeProfit === "number" ? takeProfit : null,
+    });
+
+    return res.json({
+      status: "success",
+      data: order,
+    });
+  } catch (err) {
+    return res.status(400).json({
+      status: "error",
+      message: err.message,
+    });
+  }
+}
+
+/* =========================
+   MODIFY OPEN POSITION
+   (STOP LOSS / TAKE PROFIT)
+========================= */
+export async function modifyPositionController(req, res) {
+  try {
+    const userId = String(req.user._id);
+    const { accountId, positionId, stopLoss, takeProfit } = req.body;
+
+    if (!accountId || !positionId) {
+      return res.status(400).json({
+        status: "error",
+        message: "accountId and positionId required",
+      });
+    }
+
+    await verifyAccountOwnership(userId, accountId);
+
+    tradeEngine.modifyPosition({
+      accountId: String(accountId),
+      positionId: String(positionId),
+      stopLoss: typeof stopLoss === "number" ? stopLoss : null,
+      takeProfit: typeof takeProfit === "number" ? takeProfit : null,
+    });
+
+    return res.json({
+      status: "success",
+    });
+  } catch (err) {
+    return res.status(400).json({
+      status: "error",
+      message: err.message,
+    });
+  }
+}
+
+/* =========================
+   MODIFY PENDING ORDER
+========================= */
+export async function modifyPendingOrderController(req, res) {
+  try {
+    const userId = String(req.user._id);
+    const { accountId, orderId, price, stopLoss, takeProfit } = req.body;
+
+    if (!accountId || !orderId || !price) {
+      return res.status(400).json({
+        status: "error",
+        message: "accountId, orderId and price required",
+      });
+    }
+
+    await verifyAccountOwnership(userId, accountId);
+
+    tradeEngine.modifyPendingOrder({
+      accountId: String(accountId),
+      orderId: String(orderId),
+      price: Number(price),
+      stopLoss: typeof stopLoss === "number" ? stopLoss : null,
+      takeProfit: typeof takeProfit === "number" ? takeProfit : null,
+    });
+
+    return res.json({
+      status: "success",
+    });
+  } catch (err) {
+    return res.status(400).json({
+      status: "error",
+      message: err.message,
+    });
+  }
+}
+
+/* =========================
+   CANCEL PENDING ORDER
+========================= */
+export async function cancelPendingOrderController(req, res) {
+  try {
+    const userId = String(req.user._id);
+    const { accountId, orderId } = req.body;
+
+    if (!accountId || !orderId) {
+      return res.status(400).json({
+        status: "error",
+        message: "accountId and orderId required",
+      });
+    }
+
+    await verifyAccountOwnership(userId, accountId);
+
+    tradeEngine.cancelPendingOrder({
+      accountId: String(accountId),
+      orderId: String(orderId),
+    });
+
+    return res.json({
+      status: "success",
+    });
+  } catch (err) {
+    return res.status(400).json({
+      status: "error",
+      message: err.message,
+    });
+  }
+}

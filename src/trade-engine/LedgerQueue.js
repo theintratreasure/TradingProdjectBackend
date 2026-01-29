@@ -1,6 +1,7 @@
 import Account from "../models/Account.model.js";
 import Trade from "../models/Trade.model.js";
 import Transaction from "../models/Transaction.model.js";
+import PendingOrder from "../models/PendingOrder.model.js";
 import { engineEvents } from "./EngineEvents.js";
 
 class LedgerQueue {
@@ -23,92 +24,116 @@ class LedgerQueue {
   async process({ event, payload }) {
     console.log("[LEDGER] EVENT RECEIVED:", event);
 
-    if (event === "TRADE_OPEN") {
-      await this.tradeOpen(payload);
-      return;
-    }
+    switch (event) {
+      case "TRADE_OPEN":
+        await this.tradeOpen(payload);
+        break;
 
-    if (event === "TRADE_CLOSE") {
-      await this.tradeClose(payload);
-      return;
-    }
+      case "TRADE_CLOSE":
+        await this.tradeClose(payload);
+        break;
 
-    console.warn("[LEDGER] UNKNOWN EVENT:", event);
+      case "ORDER_PENDING_CREATE":
+        await this.pendingCreate(payload);
+        break;
+
+      case "ORDER_PENDING_EXECUTE":
+        await this.pendingExecute(payload);
+        break;
+
+      case "ORDER_PENDING_CANCEL":
+        await this.pendingCancel(payload);
+        break;
+
+      default:
+        console.warn("[LEDGER] UNKNOWN EVENT:", event);
+    }
   }
 
   /* =========================
-     TRADE OPEN (DB WRITE)
+     TRADE OPEN
   ========================= */
 
-  async tradeOpen({ userId, accountId, position, ipAddress }) {
-    console.log("[LEDGER][OPEN] writing trade to DB", {
-      accountId,
-      symbol: position.symbol,
-    });
-
-    // ✅ FIX: resolve userId safely
-    let resolvedUserId = userId;
+  async tradeOpen({
+    userId,
+    accountId,
+    ipAddress,
+    positionId,
+    symbol,
+    side,
+    orderType,
+    volume,
+    contractSize,
+    leverage,
+    openPrice,
+    stopLoss,
+    takeProfit,
+    marginUsed,
+  }) {
+    const resolvedUserId =
+      userId ||
+      (await Account.findById(accountId).select("user_id"))?.user_id;
 
     if (!resolvedUserId) {
-      const account = await Account.findById(accountId).select("user_id");
-      if (!account || !account.user_id) {
-        throw new Error(
-          "Ledger tradeOpen failed: user_id not found for account"
-        );
-      }
-      resolvedUserId = String(account.user_id);
+      throw new Error("Ledger tradeOpen: userId not resolved");
+    }
+
+    if (typeof marginUsed !== "number") {
+      throw new Error("Ledger tradeOpen: marginUsed missing");
     }
 
     const trade = await Trade.create({
       userId: resolvedUserId,
       accountId,
       ipAddress: ipAddress || "SYSTEM",
-      symbol: position.symbol,
-      side: position.side,
-      orderType: position.orderType || "MARKET",
-      volume: position.volume,
-      contractSize: position.contractSize,
-      leverage: position.leverage,
-      openPrice: position.openPrice,
-      stopLoss: position.stopLoss || null,
-      takeProfit: position.takeProfit || null,
-      marginUsed: position.marginUsed,
+
+      positionId,
+      symbol,
+      side,
+      orderType,
       status: "OPEN",
+
+      volume,
+      contractSize,
+      leverage,
+      openPrice,
+      entryPrice: openPrice,
+
+      stopLoss: stopLoss ?? null,
+      takeProfit: takeProfit ?? null,
+
+      marginUsed,
       openTime: new Date(),
+      engineVersion: "ENGINE_V1",
     });
 
-    console.log("[LEDGER][OPEN][SUCCESS]", trade._id.toString());
+    console.log("[LEDGER][TRADE_OPEN][OK]", trade._id.toString());
   }
 
   /* =========================
-     TRADE CLOSE (DB WRITE)
+     TRADE CLOSE
   ========================= */
 
-  async tradeClose({ userId, accountId, position, closePrice, reason }) {
-    console.log("[LEDGER][CLOSE] closing trade", {
-      accountId,
-      symbol: position.symbol,
-    });
+  async tradeClose({
+    userId,
+    accountId,
+    positionId,
+    closePrice,
+    realizedPnL,
+    reason,
+  }) {
+    const pnl = Number(realizedPnL);
 
-    const priceDiff =
-      position.side === "BUY"
-        ? closePrice - position.openPrice
-        : position.openPrice - closePrice;
+    if (Number.isNaN(pnl)) {
+      throw new Error("Ledger tradeClose: realizedPnL is NaN");
+    }
 
-    const realizedPnL =
-      priceDiff * position.volume * position.contractSize;
-
-    // 1️⃣ UPDATE TRADE
     const trade = await Trade.findOneAndUpdate(
-      {
-        accountId,
-        status: "OPEN",
-        symbol: position.symbol,
-      },
+      { positionId, status: "OPEN" },
       {
         $set: {
           closePrice,
-          realizedPnL,
+          realizedPnL: pnl,
           closeReason: reason,
           closeTime: new Date(),
           status: "CLOSED",
@@ -118,45 +143,103 @@ class LedgerQueue {
     );
 
     if (!trade) {
-      console.error("[LEDGER][CLOSE][ERROR] Trade not found");
+      console.error("[LEDGER][TRADE_CLOSE] Trade not found", positionId);
       return;
     }
 
-    // 2️⃣ UPDATE ACCOUNT BALANCE
     const account = await Account.findById(accountId);
     if (!account) {
-      console.error("[LEDGER][CLOSE][ERROR] Account not found");
+      console.error("[LEDGER][TRADE_CLOSE] Account not found", accountId);
       return;
     }
 
-    const newBalance = account.balance + realizedPnL;
+    const newBalance = Number(account.balance) + pnl;
 
     await Account.updateOne(
       { _id: accountId },
       { $set: { balance: newBalance } }
     );
 
-    // 3️⃣ INSERT TRANSACTION
     const txn = await Transaction.create({
       user: userId || trade.userId,
       account: accountId,
-      type: realizedPnL >= 0 ? "TRADE_PROFIT" : "TRADE_LOSS",
-      amount: Math.abs(realizedPnL),
+      type: pnl >= 0 ? "TRADE_PROFIT" : "TRADE_LOSS",
+      amount: Math.abs(pnl),
       balanceAfter: newBalance,
-      referenceType: "ORDER",
+      referenceType: "TRADE",
       referenceId: trade._id,
       status: "SUCCESS",
       remark:
-        realizedPnL >= 0
+        pnl >= 0
           ? "Trade profit credited"
           : "Trade loss debited",
+      createdAt: new Date(),
     });
 
-    console.log("[LEDGER][CLOSE][SUCCESS]", {
+    console.log("[LEDGER][TRADE_CLOSE][OK]", {
       tradeId: trade._id.toString(),
       txnId: txn._id.toString(),
-      realizedPnL,
+      pnl,
     });
+  }
+
+  /* =========================
+     PENDING ORDER CREATE
+  ========================= */
+
+  async pendingCreate(order) {
+    await PendingOrder.create({
+      orderId: order.orderId,
+      userId: order.userId,
+      accountId: order.accountId,
+      symbol: order.symbol,
+      side: order.side,
+      orderType: order.orderType,
+      price: order.price,
+      volume: order.volume,
+      stopLoss: order.stopLoss ?? null,
+      takeProfit: order.takeProfit ?? null,
+      status: "PENDING",
+      createdAt: new Date(order.createdAt),
+    });
+
+    console.log("[LEDGER][PENDING_CREATE][OK]", order.orderId);
+  }
+
+  /* =========================
+     PENDING ORDER EXECUTE
+  ========================= */
+
+  async pendingExecute(order) {
+    await PendingOrder.updateOne(
+      { orderId: order.orderId },
+      {
+        $set: {
+          status: "EXECUTED",
+          executedAt: new Date(),
+        },
+      }
+    );
+
+    console.log("[LEDGER][PENDING_EXECUTE][OK]", order.orderId);
+  }
+
+  /* =========================
+     PENDING ORDER CANCEL
+  ========================= */
+
+  async pendingCancel({ orderId }) {
+    await PendingOrder.updateOne(
+      { orderId },
+      {
+        $set: {
+          status: "CANCELLED",
+          cancelledAt: new Date(),
+        },
+      }
+    );
+
+    console.log("[LEDGER][PENDING_CANCEL][OK]", orderId);
   }
 }
 

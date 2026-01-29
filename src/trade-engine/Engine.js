@@ -9,8 +9,8 @@ const DEBUG_LIVE = true;
 
 export class Engine {
   constructor() {
-    this.accounts = new Map(); // accountId -> AccountState
-    this.symbols = new Map(); // symbol -> config + prices
+    this.accounts = new Map();
+    this.symbols = new Map();
   }
 
   /* =========================
@@ -26,8 +26,17 @@ export class Engine {
         leverage,
         userId,
         lastIp,
-      }),
+      })
     );
+
+    if (DEBUG_LIVE) {
+      console.log("[ENGINE][ACCOUNT_LOADED]", {
+        accountId,
+        balance,
+        leverage,
+        userId,
+      });
+    }
   }
 
   loadSymbol(symbol, config) {
@@ -37,45 +46,43 @@ export class Engine {
       ask: 0,
       lastTickAt: 0,
     });
+
+    if (DEBUG_LIVE) {
+      console.log("[ENGINE][SYMBOL_LOADED]", symbol, config);
+    }
   }
 
   /* =========================
-     MT5 HEDGED MARGIN ENGINE
+     HEDGED MARGIN
   ========================== */
 
   recalcUsedMargin(account) {
     let totalMargin = 0;
-
-    const symbolBuckets = new Map();
+    const buckets = new Map();
 
     for (const pos of account.positions.values()) {
-      if (!symbolBuckets.has(pos.symbol)) {
-        symbolBuckets.set(pos.symbol, {
+      if (!buckets.has(pos.symbol)) {
+        buckets.set(pos.symbol, {
           buy: 0,
           sell: 0,
           contractSize: pos.contractSize,
           leverage: pos.leverage,
         });
       }
-
-      const bucket = symbolBuckets.get(pos.symbol);
-      if (pos.side === "BUY") bucket.buy += pos.volume;
-      else bucket.sell += pos.volume;
+      const b = buckets.get(pos.symbol);
+      if (pos.side === "BUY") b.buy += pos.volume;
+      else b.sell += pos.volume;
     }
 
-    for (const [symbol, bucket] of symbolBuckets.entries()) {
+    for (const [symbol, b] of buckets.entries()) {
       const sym = this.symbols.get(symbol);
       if (!sym) continue;
 
-      const netVolume = Math.abs(bucket.buy - bucket.sell);
-      if (netVolume <= 0) continue;
+      const net = Math.abs(b.buy - b.sell);
+      if (net <= 0) continue;
 
-      const price = bucket.buy > bucket.sell ? sym.ask : sym.bid;
-
-      const margin =
-        (netVolume * bucket.contractSize * price) / bucket.leverage;
-
-      totalMargin += margin;
+      const price = b.buy > b.sell ? sym.ask : sym.bid;
+      totalMargin += (net * b.contractSize * price) / b.leverage;
     }
 
     account.usedMargin = totalMargin;
@@ -111,8 +118,6 @@ export class Engine {
     });
 
     account.positions.set(position.positionId, position);
-
-    // 🔁 MT5 margin recalculation (hedge aware)
     this.recalcUsedMargin(account);
 
     if (account.freeMargin < 0) {
@@ -121,33 +126,65 @@ export class Engine {
       throw new Error("Insufficient margin");
     }
 
-    const payload = {
+    console.log("[ENGINE][MARKET_OPEN]", {
+      accountId,
+      symbol,
+      side,
+      volume,
+      openPrice,
+      stopLoss,
+      takeProfit,
+    });
+
+    ledgerQueue.enqueue("TRADE_OPEN", {
       userId: account.userId,
       accountId,
       ipAddress: account.lastIp || "SYSTEM",
-      position: {
-        positionId: position.positionId,
-        symbol,
-        side,
-        volume,
-        openPrice,
-        contractSize: sym.contractSize,
-        leverage,
-        marginUsed: account.usedMargin,
-        orderType: "MARKET",
-        stopLoss,
-        takeProfit,
-      },
-    };
-
-    engineEvents.emit("trade_open", payload);
-    ledgerQueue.enqueue("TRADE_OPEN", payload);
+      positionId: position.positionId,
+      symbol,
+      side,
+      orderType: "MARKET",
+      volume,
+      contractSize: sym.contractSize,
+      leverage,
+      openPrice,
+      stopLoss,
+      takeProfit,
+      marginUsed: account.usedMargin,
+    });
 
     return position;
   }
 
   /* =========================
-     PRICE TICK
+     PENDING ORDERS
+  ========================== */
+
+  placePendingOrder(data) {
+    const account = this.accounts.get(data.accountId);
+    if (!account) throw new Error("Invalid trading account");
+
+    if (!account.pendingOrders) {
+      account.pendingOrders = new Map();
+    }
+
+    const order = {
+      orderId: uuidv4(),
+      userId: account.userId,
+      ...data,
+      createdAt: Date.now(),
+    };
+
+    account.pendingOrders.set(order.orderId, order);
+
+    console.log("[ENGINE][PENDING_CREATED]", order);
+
+    ledgerQueue.enqueue("ORDER_PENDING_CREATE", order);
+    return order;
+  }
+
+  /* =========================
+     PRICE TICK (FULL LIVE DEBUG)
   ========================== */
 
   onTick(symbol, bid, ask) {
@@ -158,53 +195,143 @@ export class Engine {
     sym.ask = ask;
     sym.lastTickAt = Date.now();
 
+    console.log("[TICK]", { symbol, bid, ask });
+
     for (const account of this.accounts.values()) {
-      if (account.positions.size === 0) continue;
 
-      let touched = false;
+      /* ===== PENDING ORDERS DEBUG ===== */
+      if (account.pendingOrders?.size) {
+        for (const order of account.pendingOrders.values()) {
+          if (order.symbol !== symbol) continue;
 
-      for (const pos of account.positions.values()) {
-        if (pos.symbol !== symbol) continue;
-        pos.updatePnL(bid, ask);
-        touched = true;
+          const currentPrice =
+            order.side === "BUY" ? ask : bid;
 
-        if (DEBUG_LIVE) {
-          console.log("[LIVE PNL][POSITION]", {
+          const gap = Number(
+            Math.abs(currentPrice - order.price).toFixed(5)
+          );
+
+          const willHit =
+            (order.orderType === "BUY_LIMIT" && ask <= order.price) ||
+            (order.orderType === "SELL_LIMIT" && bid >= order.price) ||
+            (order.orderType === "BUY_STOP" && ask >= order.price) ||
+            (order.orderType === "SELL_STOP" && bid <= order.price);
+
+          console.log("[LIVE][PENDING]", {
             accountId: account.accountId,
-            positionId: pos.positionId,
-            symbol: pos.symbol,
-            side: pos.side,
-            openPrice: Number(pos.openPrice.toFixed(5)),
-            bid,
-            ask,
-            floatingPnL: Number(pos.floatingPnL.toFixed(2)),
+            orderId: order.orderId,
+            type: order.orderType,
+            triggerPrice: order.price,
+            currentPrice,
+            gapToTrigger: gap,
+            willHit,
+          });
+
+          if (!willHit) continue;
+
+          console.log("[ENGINE][PENDING_HIT]", order.orderId);
+
+          account.pendingOrders.delete(order.orderId);
+          ledgerQueue.enqueue("ORDER_PENDING_EXECUTE", order);
+
+          this.placeMarketOrder({
+            accountId: order.accountId,
+            symbol: order.symbol,
+            side: order.side,
+            volume: order.volume,
+            stopLoss: order.stopLoss,
+            takeProfit: order.takeProfit,
           });
         }
       }
 
-      if (!touched) continue;
+      /* ===== OPEN POSITIONS DEBUG ===== */
+      if (account.positions.size === 0) continue;
+
+      for (const pos of account.positions.values()) {
+        if (pos.symbol !== symbol) continue;
+
+        pos.updatePnL(bid, ask);
+        const price = pos.side === "BUY" ? bid : ask;
+
+        const slGap =
+          pos.stopLoss != null
+            ? Number(Math.abs(price - pos.stopLoss).toFixed(5))
+            : null;
+
+        const tpGap =
+          pos.takeProfit != null
+            ? Number(Math.abs(pos.takeProfit - price).toFixed(5))
+            : null;
+
+        console.log("[LIVE][POSITION]", {
+          accountId: account.accountId,
+          positionId: pos.positionId,
+          side: pos.side,
+          openPrice: pos.openPrice,
+          currentPrice: price,
+          floatingPnL: Number(pos.floatingPnL.toFixed(2)),
+          slGap,
+          tpGap,
+        });
+
+        if (
+          pos.stopLoss !== null &&
+          ((pos.side === "BUY" && price <= pos.stopLoss) ||
+           (pos.side === "SELL" && price >= pos.stopLoss))
+        ) {
+          console.log("[ENGINE][STOP_LOSS_HIT]", pos.positionId);
+          this.closePositionInternal(account, pos, "STOP_LOSS", sym);
+          continue;
+        }
+
+        if (
+          pos.takeProfit !== null &&
+          ((pos.side === "BUY" && price >= pos.takeProfit) ||
+           (pos.side === "SELL" && price <= pos.takeProfit))
+        ) {
+          console.log("[ENGINE][TAKE_PROFIT_HIT]", pos.positionId);
+          this.closePositionInternal(account, pos, "TAKE_PROFIT", sym);
+        }
+      }
 
       this.recalcUsedMargin(account);
 
-      if (DEBUG_LIVE) {
-        console.log("[LIVE ACCOUNT]", {
-          accountId: account.accountId,
-          balance: Number(account.balance.toFixed(2)),
-          equity: Number(account.equity.toFixed(2)),
-          usedMargin: Number(account.usedMargin.toFixed(2)),
-          freeMargin: Number(account.freeMargin.toFixed(2)),
-        });
-      }
+      console.log("[LIVE][ACCOUNT]", {
+        accountId: account.accountId,
+        balance: Number(account.balance.toFixed(2)),
+        equity: Number(account.equity.toFixed(2)),
+        usedMargin: Number(account.usedMargin.toFixed(2)),
+        freeMargin: Number(account.freeMargin.toFixed(2)),
+      });
 
       if (RiskManager.shouldStopOut(account)) {
+        console.log("[ENGINE][STOP_OUT_TRIGGERED]", account.accountId);
         this.forceCloseWorst(account);
       }
     }
   }
 
   /* =========================
-     STOP OUT (MT5 STYLE)
+     INTERNAL CLOSE
   ========================== */
+
+  closePositionInternal(account, pos, reason, sym) {
+    pos.updatePnL(sym.bid, sym.ask);
+
+    account.positions.delete(pos.positionId);
+    account.balance += pos.floatingPnL;
+    this.recalcUsedMargin(account);
+
+    ledgerQueue.enqueue("TRADE_CLOSE", {
+      userId: account.userId,
+      accountId: account.accountId,
+      positionId: pos.positionId,
+      closePrice: pos.side === "BUY" ? sym.bid : sym.ask,
+      realizedPnL: Number(pos.floatingPnL.toFixed(2)),
+      reason,
+    });
+  }
 
   forceCloseWorst(account) {
     let worst = null;
@@ -214,73 +341,25 @@ export class Engine {
         worst = pos;
       }
     }
-
     if (!worst) return;
 
     const sym = this.symbols.get(worst.symbol);
-    if (!sym) return;
-
-    const closePrice = worst.side === "BUY" ? sym.bid : sym.ask;
-
-    worst.updatePnL(sym.bid, sym.ask);
-
-    account.positions.delete(worst.positionId);
-    account.balance += worst.floatingPnL;
-
-    this.recalcUsedMargin(account);
-
-    const payload = {
-      userId: account.userId,
-      accountId: account.accountId,
-      position: worst,
-      closePrice,
-      reason: "STOP_OUT",
-    };
-
-    engineEvents.emit("trade_close", payload);
-    ledgerQueue.enqueue("TRADE_CLOSE", payload);
+    this.closePositionInternal(account, worst, "STOP_OUT", sym);
   }
 
-  /* =========================
-     MANUAL CLOSE
-  ========================== */
-
-  squareOffPosition({ accountId, positionId, reason = "MANUAL_CLOSE" }) {
+  squareOffPosition({ accountId, positionId, reason = "MANUAL" }) {
     const account = this.accounts.get(accountId);
     if (!account) throw new Error("Account not found");
 
-    const position = account.positions.get(positionId);
-    if (!position) throw new Error("Position not found");
+    const pos = account.positions.get(positionId);
+    if (!pos) throw new Error("Position not found");
 
-    const sym = this.symbols.get(position.symbol);
-    if (!sym || sym.bid <= 0 || sym.ask <= 0) {
-      throw new Error("Price not available");
-    }
-
-    const closePrice = position.side === "BUY" ? sym.bid : sym.ask;
-
-    position.updatePnL(sym.bid, sym.ask);
-
-    account.positions.delete(positionId);
-    account.balance += position.floatingPnL;
-
-    this.recalcUsedMargin(account);
-
-    const payload = {
-      userId: account.userId,
-      accountId: account.accountId,
-      position,
-      closePrice,
-      reason,
-    };
-
-    engineEvents.emit("trade_close", payload);
-    ledgerQueue.enqueue("TRADE_CLOSE", payload);
+    const sym = this.symbols.get(pos.symbol);
+    this.closePositionInternal(account, pos, reason, sym);
 
     return {
       positionId,
-      closePrice,
-      realizedPnL: position.floatingPnL,
+      realizedPnL: Number(pos.floatingPnL.toFixed(2)),
     };
   }
 }

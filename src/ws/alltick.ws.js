@@ -107,7 +107,7 @@ class AlltickWS extends EventEmitter {
 
         if (json.cmd_id === 22999 && json.data) {
           // 🔥 RAW MARKET DATA
-          console.log(`[${this.marketName}] 📈 TICK RECEIVED`, json.data);
+          // console.log(`[${this.marketName}] 📈 TICK RECEIVED`, json.data);
           this.emit("data", json.data);
         }
       } catch (err) {
@@ -309,22 +309,22 @@ function feedEnginePrice(data) {
   const ask = Number(bestAsk);
 
   // ⚠️ crypto feeds often send only bids or only asks
-  if (!Number.isFinite(bid) || !Number.isFinite(ask)) {
-    console.warn("[ENGINE FEED SKIPPED]", {
-      symbol,
-      bid,
-      ask,
-      reason: "ORDERBOOK_INCOMPLETE",
-    });
-    return;
-  }
+  // if (!Number.isFinite(bid) || !Number.isFinite(ask)) {
+  //   console.warn("[ENGINE FEED SKIPPED]", {
+  //     symbol,
+  //     bid,
+  //     ask,
+  //     reason: "ORDERBOOK_INCOMPLETE",
+  //   });
+    // return;
+  // }
 
-  console.log(
-    "[ENGINE FEED] ✅ Price sent to engine",
-    symbol,
-    bid,
-    ask
-  );
+  // console.log(
+  //   "[ENGINE FEED] ✅ Price sent to engine",
+  //   symbol,
+  //   bid,
+  //   ask
+  // );
 
   tradeEngine.onTick(symbol, bid, ask);
 }

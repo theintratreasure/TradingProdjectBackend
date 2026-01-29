@@ -29,6 +29,14 @@ const TradeSchema = new mongoose.Schema(
        TRADE IDENTITY
     ========================== */
 
+    /** 🔑 ENGINE POSITION ID (CRITICAL) */
+    positionId: {
+      type: String,
+      required: true,
+      index: true,
+      unique: true,
+    },
+
     symbol: {
       type: String,
       required: true,
@@ -41,11 +49,13 @@ const TradeSchema = new mongoose.Schema(
       required: true,
     },
 
+    /** ✅ FULL ORDER TYPES (ENGINE MATCHED) */
     orderType: {
       type: String,
       enum: [
         "MARKET",
-        "LIMIT",
+        "BUY_LIMIT",
+        "SELL_LIMIT",
         "BUY_STOP",
         "SELL_STOP",
       ],
@@ -56,7 +66,7 @@ const TradeSchema = new mongoose.Schema(
     status: {
       type: String,
       enum: ["PENDING", "OPEN", "CLOSED", "CANCELLED"],
-      default: "PENDING",
+      default: "OPEN",
       index: true,
     },
 
@@ -80,20 +90,21 @@ const TradeSchema = new mongoose.Schema(
       required: true,
     },
 
+    /** Actual executed price */
     openPrice: {
       type: Number,
+      required: true,
+    },
+
+    /** Used for pending orders */
+    entryPrice: {
+      type: Number,
+      default: null,
     },
 
     closePrice: {
       type: Number,
-    },
-
-    entryPrice: {
-      type: Number,
-      /**
-       * Used for:
-       * LIMIT / BUY_STOP / SELL_STOP
-       */
+      default: null,
     },
 
     /* =========================
@@ -102,10 +113,12 @@ const TradeSchema = new mongoose.Schema(
 
     stopLoss: {
       type: Number,
+      default: null,
     },
 
     takeProfit: {
       type: Number,
+      default: null,
     },
 
     /* =========================
@@ -115,8 +128,10 @@ const TradeSchema = new mongoose.Schema(
     marginUsed: {
       type: Number,
       required: true,
+      min: 0,
     },
 
+    /** 🔒 FINAL PNL (ENGINE CALCULATED ONLY) */
     realizedPnL: {
       type: Number,
       default: 0,
@@ -128,11 +143,13 @@ const TradeSchema = new mongoose.Schema(
 
     openTime: {
       type: Date,
+      required: true,
       index: true,
     },
 
     closeTime: {
       type: Date,
+      default: null,
     },
 
     closeReason: {
@@ -144,6 +161,7 @@ const TradeSchema = new mongoose.Schema(
         "STOP_OUT",
         "SYSTEM",
       ],
+      default: null,
     },
 
     /* =========================
@@ -152,26 +170,29 @@ const TradeSchema = new mongoose.Schema(
 
     engineVersion: {
       type: String,
+      default: "ENGINE_V1",
     },
 
     metadata: {
       type: Object,
+      default: {},
     },
   },
   {
     timestamps: true,
+    versionKey: false,
   }
 );
 
 /* =========================
    🔥 PERFORMANCE INDEXES
-   (150k+ users ready)
 ========================== */
 
 TradeSchema.index({ accountId: 1, status: 1 });
 TradeSchema.index({ userId: 1, openTime: -1 });
 TradeSchema.index({ symbol: 1, status: 1 });
 TradeSchema.index({ orderType: 1, status: 1 });
+TradeSchema.index({ positionId: 1 });
 TradeSchema.index({ openTime: -1 });
 
 const Trade = mongoose.model("Trade", TradeSchema);

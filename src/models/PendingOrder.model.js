@@ -1,0 +1,150 @@
+import mongoose from "mongoose";
+
+const PendingOrderSchema = new mongoose.Schema(
+  {
+    /* =========================
+       OWNERSHIP / SECURITY
+    ========================== */
+
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+      index: true,
+    },
+
+    accountId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Account",
+      required: true,
+      index: true,
+    },
+
+    /* =========================
+       ORDER IDENTITY
+    ========================== */
+
+    /** Engine generated order id */
+    orderId: {
+      type: String,
+      required: true,
+      unique: true,
+      index: true,
+    },
+
+    symbol: {
+      type: String,
+      required: true,
+      index: true,
+    },
+
+    side: {
+      type: String,
+      enum: ["BUY", "SELL"],
+      required: true,
+    },
+
+    /** Pending order types only */
+    orderType: {
+      type: String,
+      enum: ["BUY_LIMIT", "SELL_LIMIT", "BUY_STOP", "SELL_STOP"],
+      required: true,
+      index: true,
+    },
+
+    /* =========================
+       PRICE & VOLUME
+    ========================== */
+
+    /** Trigger price */
+    price: {
+      type: Number,
+      required: true,
+    },
+
+    volume: {
+      type: Number,
+      required: true,
+      min: 0,
+    },
+
+    /* =========================
+       STOP LOSS / TAKE PROFIT
+    ========================== */
+
+    stopLoss: {
+      type: Number,
+      default: null,
+    },
+
+    takeProfit: {
+      type: Number,
+      default: null,
+    },
+
+    /* =========================
+       LIFECYCLE
+    ========================== */
+
+    status: {
+      type: String,
+      enum: ["PENDING", "EXECUTED", "CANCELLED", "EXPIRED"],
+      default: "PENDING",
+      index: true,
+    },
+
+    /** When order converted to trade */
+    executedAt: {
+      type: Date,
+      default: null,
+    },
+
+    /** Trade positionId created from this order */
+    executedPositionId: {
+      type: String,
+      default: null,
+      index: true,
+    },
+
+    cancelledAt: {
+      type: Date,
+      default: null,
+    },
+
+    expireAt: {
+      type: Date,
+      default: null,
+    },
+
+    /* =========================
+       AUDIT / META
+    ========================== */
+
+    engineVersion: {
+      type: String,
+      default: "ENGINE_V1",
+    },
+
+    metadata: {
+      type: Object,
+      default: {},
+    },
+  },
+  {
+    timestamps: true,
+    versionKey: false,
+  }
+);
+
+/* =========================
+   🔥 PERFORMANCE INDEXES
+========================== */
+
+PendingOrderSchema.index({ accountId: 1, status: 1 });
+PendingOrderSchema.index({ userId: 1, createdAt: -1 });
+PendingOrderSchema.index({ symbol: 1, status: 1 });
+PendingOrderSchema.index({ orderType: 1, status: 1 });
+PendingOrderSchema.index({ expireAt: 1 });
+
+const PendingOrder = mongoose.model("PendingOrder", PendingOrderSchema);
+export default PendingOrder;
