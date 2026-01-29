@@ -1,29 +1,21 @@
 import { watchlistService } from "../services/watchlist.service.js";
+
 /**
- * USER APIs (ACCOUNT-WISE)
+ * USER WATCHLIST APIs (ACCOUNT JWT)
  */
 
 export const getWatchlist = async (req, res) => {
   try {
-    const userId = req.user?._id;
-    const accountId = String(req.query.accountId || "").trim();
+    const { userId, accountId } = req.account;
 
-    if (!userId) {
-      return res.status(401).json({ success: false, message: "Unauthorized" });
-    }
-
-    if (!accountId) {
-      return res
-        .status(400)
-        .json({ success: false, message: "accountId is required" });
-    }
-
-    // ✅ ensure default only for this account
     await watchlistService.ensureDefaultForAccount(userId, accountId);
 
     const limit = watchlistService.parseLimit(req.query.limit);
-
-    const result = await watchlistService.getAccountWatchlist(userId, accountId, limit);
+    const result = await watchlistService.getAccountWatchlist(
+      userId,
+      accountId,
+      limit
+    );
 
     if (result?.error) {
       return res
@@ -44,18 +36,7 @@ export const getWatchlist = async (req, res) => {
 
 export const getWatchlistItem = async (req, res) => {
   try {
-    const userId = req.user?._id;
-    const accountId = String(req.query.accountId || "").trim();
-
-    if (!userId) {
-      return res.status(401).json({ success: false, message: "Unauthorized" });
-    }
-
-    if (!accountId) {
-      return res
-        .status(400)
-        .json({ success: false, message: "accountId is required" });
-    }
+    const { userId, accountId } = req.account;
 
     const result = await watchlistService.getOne(
       userId,
@@ -82,24 +63,13 @@ export const getWatchlistItem = async (req, res) => {
 
 export const addToWatchlist = async (req, res) => {
   try {
-    const userId = req.user?._id;
+    const { userId, accountId } = req.account;
 
-    //  take accountId from body OR query (frontend flexibility)
-    const accountId =
-      String(req.body?.accountId || "").trim() ||
-      String(req.query.accountId || "").trim();
-
-    if (!userId) {
-      return res.status(401).json({ success: false, message: "Unauthorized" });
-    }
-
-    if (!accountId) {
-      return res
-        .status(400)
-        .json({ success: false, message: "accountId is required" });
-    }
-
-    const result = await watchlistService.addUserItem(userId, accountId, req.body);
+    const result = await watchlistService.addUserItem(
+      userId,
+      accountId,
+      req.body
+    );
 
     if (result?.error) {
       return res
@@ -109,7 +79,11 @@ export const addToWatchlist = async (req, res) => {
 
     return res.status(result.alreadyExists ? 200 : 201).json({
       success: true,
-      message: result.message || (result.alreadyExists ? "Already in watchlist" : "Added to watchlist"),
+      message:
+        result.message ||
+        (result.alreadyExists
+          ? "Already in watchlist"
+          : "Added to watchlist"),
       data: result.data,
     });
   } catch (error) {
@@ -120,18 +94,7 @@ export const addToWatchlist = async (req, res) => {
 
 export const removeFromWatchlist = async (req, res) => {
   try {
-    const userId = req.user?._id;
-    const accountId = String(req.query.accountId || "").trim();
-
-    if (!userId) {
-      return res.status(401).json({ success: false, message: "Unauthorized" });
-    }
-
-    if (!accountId) {
-      return res
-        .status(400)
-        .json({ success: false, message: "accountId is required" });
-    }
+    const { userId, accountId } = req.account;
 
     const result = await watchlistService.removeUserItem(
       userId,
@@ -157,7 +120,7 @@ export const removeFromWatchlist = async (req, res) => {
 };
 
 /**
- *  DEFAULT WATCHLIST APIs (ADMIN / YOUR CONTROL)
+ * DEFAULT WATCHLIST APIs (ADMIN) — UNTOUCHED
  */
 
 export const getDefaultWatchlist = async (req, res) => {
@@ -219,51 +182,43 @@ export const removeDefaultWatchlistItem = async (req, res) => {
 
 export const getSegmentInstrumentsWithWatchlistStatus = async (req, res) => {
   try {
-    const userId = req.user?._id;
-    const accountId = String(req.query?.accountId || '').trim();
-    const segment = String(req.params?.segment || '').trim();
-    const limitRaw = req.query?.limit;
+    const { userId, accountId } = req.account;
+    const segment = String(req.params.segment || "").trim();
+    const limit = watchlistService.parseLimit(req.query.limit);
 
-    const limit = watchlistService.parseLimit(limitRaw);
-
-    if (!userId) {
-      return res.status(401).json({ message: 'Unauthorized' });
-    }
-
-    const result = await watchlistService.getSegmentInstrumentsWithStatus(
-      userId,
-      accountId,
-      segment,
-      limit
-    );
+    const result =
+      await watchlistService.getSegmentInstrumentsWithStatus(
+        userId,
+        accountId,
+        segment,
+        limit
+      );
 
     if (result?.error) {
-      return res.status(result.error.status).json({ message: result.error.message });
+      return res
+        .status(result.error.status)
+        .json({ message: result.error.message });
     }
 
     return res.status(200).json({
-      message: 'Segment instruments fetched',
+      message: "Segment instruments fetched",
       data: result.data,
     });
   } catch (error) {
-    return res.status(500).json({ message: 'Something went wrong' });
+    return res.status(500).json({ message: "Something went wrong" });
   }
 };
 
 export const searchInstrumentsWithWatchlistStatus = async (req, res) => {
   try {
-    const userId = req.user?._id;
-    const accountId = String(req.query?.accountId || "").trim();
+    const q = String(req.query.q || "").trim();
+    const limit = watchlistService.parseLimit(req.query.limit);
 
-    const q = String(req.query?.q || "").trim();
-    const limit = watchlistService.parseLimit(req.query?.limit);
-
-    if (!userId) {
-      return res.status(401).json({ message: "Unauthorized" });
-    }
-
-    // segment ignore (global search)
-    const result = await watchlistService.searchInstrumentsOnly(q, "", limit);
+    const result = await watchlistService.searchInstrumentsOnly(
+      q,
+      "",
+      limit
+    );
 
     if (result?.error) {
       return res
@@ -280,4 +235,3 @@ export const searchInstrumentsWithWatchlistStatus = async (req, res) => {
     return res.status(500).json({ message: "Something went wrong" });
   }
 };
-
