@@ -1,5 +1,4 @@
 import { Router } from "express";
-import { authMiddleware } from "../../middlewares/auth.middleware.js";
 import {
   placeMarketOrderController,
   placePendingOrderController,
@@ -12,45 +11,34 @@ import {
   getTradeSummaryController,
   getPositionsController,
 } from "../../controllers/trade.controller.js";
+import { accountAuthMiddleware } from "../../middlewares/accountAuth.middleware.js";
 
 const router = Router();
 
 /* =========================
    MARKET ORDERS
 ========================= */
-// BUY MARKET / SELL MARKET
-router.post("/market", authMiddleware, placeMarketOrderController);
+router.post("/market", accountAuthMiddleware, placeMarketOrderController);
 
 /* =========================
    PENDING ORDERS
 ========================= */
-// BUY LIMIT / SELL LIMIT / BUY STOP / SELL STOP
-router.post("/pending", authMiddleware, placePendingOrderController);
-
-// MODIFY PENDING ORDER (price / SL / TP)
-router.patch("/pending/modify", authMiddleware, modifyPendingOrderController);
-
-// CANCEL PENDING ORDER
-router.post("/pending/cancel", authMiddleware, cancelPendingOrderController);
+router.post("/pending", accountAuthMiddleware, placePendingOrderController);
+router.patch("/pending/modify", accountAuthMiddleware, modifyPendingOrderController);
+router.post("/pending/cancel", accountAuthMiddleware, cancelPendingOrderController);
 
 /* =========================
    OPEN POSITIONS
 ========================= */
-// MODIFY SL / TP (open trade)
-router.patch("/position/modify", authMiddleware, modifyPositionController);
+router.patch("/position/modify", accountAuthMiddleware, modifyPositionController);
+router.post("/position/close", accountAuthMiddleware, closePosition);
 
-// CLOSE TRADE (manual close)
-router.post("/position/close", authMiddleware, closePosition);
+/* =========================
+   HISTORY & REPORTS
+========================= */
+router.get("/orders", accountAuthMiddleware, getOrdersController);
+router.get("/deals", accountAuthMiddleware, getDealsController);
+router.get("/summary", accountAuthMiddleware, getTradeSummaryController);
+router.get("/positions", accountAuthMiddleware, getPositionsController);
 
-// trade orders history (closed / cancelled)
-router.get("/orders",authMiddleware,getOrdersController);
-
-// trade deals (filled orders)
-router.get("/deals", authMiddleware, getDealsController);
-
-// trade summary (PNL, commissions, swaps)
-router.get("/summary", authMiddleware, getTradeSummaryController);
-
-// trade positions (open trades) execution history
-router.get("/positions", authMiddleware, getPositionsController);
 export default router;

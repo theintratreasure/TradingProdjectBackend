@@ -1,6 +1,11 @@
 import { tradeEngine } from "../trade-engine/bootstrap.js";
 import Account from "../models/Account.model.js";
-import { getDealsService, getOrdersService, getPositionsService, getTradeSummaryService } from "../services/tradeOrder.service.js";
+import {
+  getDealsService,
+  getOrdersService,
+  getPositionsService,
+  getTradeSummaryService,
+} from "../services/tradeOrder.service.js";
 
 /* =========================
    COMMON: ACCOUNT OWNERSHIP
@@ -22,21 +27,13 @@ async function verifyAccountOwnership(userId, accountId) {
 ========================= */
 export async function placeMarketOrderController(req, res) {
   try {
-    const userId = String(req.user._id);
+    const { userId, accountId } = req.account;
+    const { symbol, side, volume, stopLoss, takeProfit } = req.body;
 
-    const {
-      accountId,
-      symbol,
-      side,
-      volume,
-      stopLoss,
-      takeProfit,
-    } = req.body;
-
-    if (!accountId || !symbol || !side || !volume) {
+    if (!symbol || !side || !volume) {
       return res.status(400).json({
         status: "error",
-        message: "accountId, symbol, side and volume are required",
+        message: "symbol, side and volume are required",
       });
     }
 
@@ -50,7 +47,7 @@ export async function placeMarketOrderController(req, res) {
     await verifyAccountOwnership(userId, accountId);
 
     const position = tradeEngine.placeMarketOrder({
-      accountId: String(accountId),
+      accountId,
       symbol: String(symbol).toUpperCase(),
       side,
       volume: Number(volume),
@@ -60,14 +57,7 @@ export async function placeMarketOrderController(req, res) {
 
     return res.json({
       status: "success",
-      data: {
-        positionId: position.positionId,
-        accountId: position.accountId,
-        symbol: position.symbol,
-        side: position.side,
-        volume: position.volume,
-        openPrice: position.openPrice,
-      },
+      data: position,
     });
   } catch (err) {
     return res.status(400).json({
@@ -82,21 +72,21 @@ export async function placeMarketOrderController(req, res) {
 ========================= */
 export async function closePosition(req, res) {
   try {
-    const userId = String(req.user._id);
-    const { accountId, positionId } = req.body;
+    const { userId, accountId } = req.account;
+    const { positionId } = req.body;
 
-    if (!accountId || !positionId) {
+    if (!positionId) {
       return res.status(400).json({
         status: "error",
-        message: "accountId and positionId required",
+        message: "positionId required",
       });
     }
 
     await verifyAccountOwnership(userId, accountId);
 
     const result = tradeEngine.squareOffPosition({
-      accountId: String(accountId),
-      positionId: String(positionId),
+      accountId,
+      positionId,
       reason: "MANUAL_CLOSE",
     });
 
@@ -114,15 +104,11 @@ export async function closePosition(req, res) {
 
 /* =========================
    PLACE PENDING ORDER
-   (BUY LIMIT / SELL LIMIT /
-    BUY STOP / SELL STOP)
 ========================= */
 export async function placePendingOrderController(req, res) {
   try {
-    const userId = String(req.user._id);
-
+    const { userId, accountId } = req.account;
     const {
-      accountId,
       symbol,
       side,
       orderType,
@@ -132,14 +118,7 @@ export async function placePendingOrderController(req, res) {
       takeProfit,
     } = req.body;
 
-    if (
-      !accountId ||
-      !symbol ||
-      !side ||
-      !orderType ||
-      !price ||
-      !volume
-    ) {
+    if (!symbol || !side || !orderType || !price || !volume) {
       return res.status(400).json({
         status: "error",
         message: "Missing required fields",
@@ -149,8 +128,8 @@ export async function placePendingOrderController(req, res) {
     await verifyAccountOwnership(userId, accountId);
 
     const order = tradeEngine.placePendingOrder({
-      userId: req.user._id, 
-      accountId: String(accountId),
+      userId,
+      accountId,
       symbol: String(symbol).toUpperCase(),
       side,
       orderType,
@@ -174,32 +153,29 @@ export async function placePendingOrderController(req, res) {
 
 /* =========================
    MODIFY OPEN POSITION
-   (STOP LOSS / TAKE PROFIT)
 ========================= */
 export async function modifyPositionController(req, res) {
   try {
-    const userId = String(req.user._id);
-    const { accountId, positionId, stopLoss, takeProfit } = req.body;
+    const { userId, accountId } = req.account;
+    const { positionId, stopLoss, takeProfit } = req.body;
 
-    if (!accountId || !positionId) {
+    if (!positionId) {
       return res.status(400).json({
         status: "error",
-        message: "accountId and positionId required",
+        message: "positionId required",
       });
     }
 
     await verifyAccountOwnership(userId, accountId);
 
     tradeEngine.modifyPosition({
-      accountId: String(accountId),
-      positionId: String(positionId),
+      accountId,
+      positionId,
       stopLoss: typeof stopLoss === "number" ? stopLoss : null,
       takeProfit: typeof takeProfit === "number" ? takeProfit : null,
     });
 
-    return res.json({
-      status: "success",
-    });
+    return res.json({ status: "success" });
   } catch (err) {
     return res.status(400).json({
       status: "error",
@@ -213,29 +189,27 @@ export async function modifyPositionController(req, res) {
 ========================= */
 export async function modifyPendingOrderController(req, res) {
   try {
-    const userId = String(req.user._id);
-    const { accountId, orderId, price, stopLoss, takeProfit } = req.body;
+    const { userId, accountId } = req.account;
+    const { orderId, price, stopLoss, takeProfit } = req.body;
 
-    if (!accountId || !orderId || !price) {
+    if (!orderId || !price) {
       return res.status(400).json({
         status: "error",
-        message: "accountId, orderId and price required",
+        message: "orderId and price required",
       });
     }
 
     await verifyAccountOwnership(userId, accountId);
 
     tradeEngine.modifyPendingOrder({
-      accountId: String(accountId),
-      orderId: String(orderId),
+      accountId,
+      orderId,
       price: Number(price),
       stopLoss: typeof stopLoss === "number" ? stopLoss : null,
       takeProfit: typeof takeProfit === "number" ? takeProfit : null,
     });
 
-    return res.json({
-      status: "success",
-    });
+    return res.json({ status: "success" });
   } catch (err) {
     return res.status(400).json({
       status: "error",
@@ -249,26 +223,24 @@ export async function modifyPendingOrderController(req, res) {
 ========================= */
 export async function cancelPendingOrderController(req, res) {
   try {
-    const userId = String(req.user._id);
-    const { accountId, orderId } = req.body;
+    const { userId, accountId } = req.account;
+    const { orderId } = req.body;
 
-    if (!accountId || !orderId) {
+    if (!orderId) {
       return res.status(400).json({
         status: "error",
-        message: "accountId and orderId required",
+        message: "orderId required",
       });
     }
 
     await verifyAccountOwnership(userId, accountId);
 
     tradeEngine.cancelPendingOrder({
-      accountId: String(accountId),
-      orderId: String(orderId),
+      accountId,
+      orderId,
     });
 
-    return res.json({
-      status: "success",
-    });
+    return res.json({ status: "success" });
   } catch (err) {
     return res.status(400).json({
       status: "error",
@@ -276,27 +248,14 @@ export async function cancelPendingOrderController(req, res) {
     });
   }
 }
+
 /* =========================
-   ORDERS HISTORY API 
+   ORDERS HISTORY
 ========================= */
 export async function getOrdersController(req, res) {
   try {
-    const userId = String(req.user._id);
-    const {
-      accountId,
-      page = 1,
-      limit = 20,
-      symbol,
-      from,
-      to,
-    } = req.query;
-
-    if (!accountId) {
-      return res.status(400).json({
-        status: "error",
-        message: "accountId is required",
-      });
-    }
+    const { userId, accountId } = req.account;
+    const { page = 1, limit = 20, symbol, from, to } = req.query;
 
     await verifyAccountOwnership(userId, accountId);
 
@@ -311,9 +270,7 @@ export async function getOrdersController(req, res) {
 
     return res.json({
       status: "success",
-      summary: result.summary,
-      pagination: result.pagination,
-      orders: result.orders,
+      ...result,
     });
   } catch (err) {
     return res.status(400).json({
@@ -322,27 +279,14 @@ export async function getOrdersController(req, res) {
     });
   }
 }
+
 /* =========================
-   DEALS HISTORY API 
+   DEALS HISTORY
 ========================= */
 export async function getDealsController(req, res) {
   try {
-    const userId = String(req.user._id);
-    const {
-      accountId,
-      page = 1,
-      limit = 20,
-      symbol,
-      from,
-      to,
-    } = req.query;
-
-    if (!accountId) {
-      return res.status(400).json({
-        status: "error",
-        message: "accountId is required",
-      });
-    }
+    const { userId, accountId } = req.account;
+    const { page = 1, limit = 20, symbol, from, to } = req.query;
 
     await verifyAccountOwnership(userId, accountId);
 
@@ -357,9 +301,7 @@ export async function getDealsController(req, res) {
 
     return res.json({
       status: "success",
-      summary: data.summary,
-      pagination: data.pagination,
-      deals: data.deals,
+      ...data,
     });
   } catch (err) {
     return res.status(400).json({
@@ -368,20 +310,14 @@ export async function getDealsController(req, res) {
     });
   }
 }
+
 /* =========================
-   TRADE SUMMARY PNL , DEPOSIT , BALANCE API 
+   TRADE SUMMARY
 ========================= */
 export async function getTradeSummaryController(req, res) {
   try {
-    const userId = String(req.user._id);
-    const { accountId, from, to } = req.query;
-
-    if (!accountId) {
-      return res.status(400).json({
-        status: "error",
-        message: "accountId is required",
-      });
-    }
+    const { userId, accountId } = req.account;
+    const { from, to } = req.query;
 
     await verifyAccountOwnership(userId, accountId);
 
@@ -402,28 +338,21 @@ export async function getTradeSummaryController(req, res) {
     });
   }
 }
+
 /* =========================
-   open TRADE POSITIONS HISTORY API 
+   OPEN POSITIONS
 ========================= */
 export async function getPositionsController(req, res) {
   try {
-    const userId = String(req.user._id);
+    const { userId, accountId } = req.account;
     const {
-      accountId,
       page = 1,
       limit = 20,
       symbol,
       from,
       to,
-      status, // OPEN / CLOSED
+      status,
     } = req.query;
-
-    if (!accountId) {
-      return res.status(400).json({
-        status: "error",
-        message: "accountId is required",
-      });
-    }
 
     await verifyAccountOwnership(userId, accountId);
 
@@ -439,8 +368,7 @@ export async function getPositionsController(req, res) {
 
     return res.json({
       status: "success",
-      pagination: result.pagination,
-      positions: result.positions,
+      ...result,
     });
   } catch (err) {
     return res.status(400).json({

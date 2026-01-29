@@ -174,6 +174,7 @@ const TradeSchema = new mongoose.Schema(
         "TAKE_PROFIT",
         "STOP_OUT",
         "SYSTEM",
+        "TRADE",
       ],
       default: null,
     },

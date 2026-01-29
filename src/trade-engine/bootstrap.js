@@ -9,7 +9,7 @@ export async function bootstrapEngine({ accounts, symbols }) {
       accountId: String(acc._id),
       balance: acc.balance,
       leverage: acc.leverage,
-      userId: String(acc.user_id),   // ✅ REQUIRED FIX
+      userId: String(acc._id),   // ✅ REQUIRED FIX
       lastIp: acc.lastIp || "SYSTEM",
     });
   }

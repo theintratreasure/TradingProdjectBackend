@@ -249,3 +249,52 @@ export async function resetDemoAccount({ userId, accountId }) {
   await account.save();
   return account;
 }
+/**
+ * =====================================================
+ * Account leverage setting user service
+ * =====================================================
+ */
+export async function setAccountLeverage({ userId, accountId, leverage }) {
+  if (!userId || !accountId) {
+    throw new Error("Invalid request");
+  }
+
+  const account = await Account.findOne({
+    _id: accountId,
+    user_id: userId,
+    status: "active"
+  });
+
+  if (!account) {
+    const err = new Error("Account not found");
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const plan = await AccountPlan.findById(account.account_plan_id).lean();
+
+  if (!plan || !plan.isActive) {
+    throw new Error("Account plan not active");
+  }
+
+  // PLAN MAX LEVERAGE CHECK
+  // max_leverage = 0 means unlimited
+  if (plan.max_leverage > 0 && leverage > plan.max_leverage) {
+    throw new Error(
+      `Maximum allowed leverage for this plan is ${plan.max_leverage}`
+    );
+  }
+
+  if (leverage < 1) {
+    throw new Error("Leverage must be at least 1");
+  }
+
+  account.leverage = leverage;
+  await account.save();
+
+  return {
+    account_id: account._id,
+    account_number: account.account_number,
+    leverage: account.leverage
+  };
+}

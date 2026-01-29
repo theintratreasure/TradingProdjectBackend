@@ -60,10 +60,12 @@ export async function accountLoginService({
   }
 
   const tokenPayload = {
-    accountId: account._id.toString(),
-    account_number: account.account_number,
-    sessionType,
-  };
+  accountId: account._id.toString(),
+  userId: account.user_id.toString(), // 🔥 MUST
+  account_number: account.account_number,
+  sessionType,
+};
+
 
   const tradeToken = signAccountToken(tokenPayload);
 

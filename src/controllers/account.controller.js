@@ -2,7 +2,8 @@ import {
   createAccount,
   getUserAccounts,
   getUserAccountDetail,
-  resetDemoAccount
+  resetDemoAccount,
+  setAccountLeverage
 } from "../services/account.service.js";
 
 export async function createAccountController(req, res) {
@@ -87,5 +88,43 @@ export async function resetDemoAccountController(req, res) {
     res
       .status(err.statusCode || 500)
       .json({ success: false, message: err.message });
+  }
+}
+
+export async function setAccountLeverageController(req, res) {
+  try {
+    const { id } = req.params;
+    const { leverage } = req.body;
+
+    if (!leverage || typeof leverage !== "number") {
+      return res.status(400).json({
+        success: false,
+        message: "Leverage must be a number"
+      });
+    }
+
+    if (leverage < 1) {
+      return res.status(400).json({
+        success: false,
+        message: "Leverage cannot be less than 1"
+      });
+    }
+
+    const data = await setAccountLeverage({
+      userId: req.user._id,
+      accountId: id,
+      leverage
+    });
+
+    return res.json({
+      success: true,
+      message: "Leverage updated successfully",
+      data
+    });
+  } catch (err) {
+    return res.status(err.statusCode || 400).json({
+      success: false,
+      message: err.message
+    });
   }
 }

@@ -1,5 +1,4 @@
 import { verifyAccountToken } from "../utils/jwt.util.js";
-import Account from "../models/Account.model.js";
 
 export function accountAuthMiddleware(req, res, next) {
   try {
@@ -11,16 +10,17 @@ export function accountAuthMiddleware(req, res, next) {
     const token = header.split(" ")[1];
     const decoded = verifyAccountToken(token);
 
+    if (
+      !decoded.accountId ||
+      !decoded.userId ||
+      !decoded.sessionType
+    ) {
+      return res.status(401).json({ message: "Invalid token payload" });
+    }
+
     req.account = decoded;
     next();
   } catch (err) {
     return res.status(401).json({ message: "Invalid token" });
   }
-}
-
-export function tradeOnly(req, res, next) {
-  if (req.account.sessionType !== "TRADE") {
-    return res.status(403).json({ message: "Trade permission required" });
-  }
-  next();
 }
