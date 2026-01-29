@@ -1,5 +1,6 @@
 import { tradeEngine } from "../trade-engine/bootstrap.js";
 import Account from "../models/Account.model.js";
+import { getDealsService, getOrdersService, getPositionsService, getTradeSummaryService } from "../services/tradeOrder.service.js";
 
 /* =========================
    COMMON: ACCOUNT OWNERSHIP
@@ -267,6 +268,179 @@ export async function cancelPendingOrderController(req, res) {
 
     return res.json({
       status: "success",
+    });
+  } catch (err) {
+    return res.status(400).json({
+      status: "error",
+      message: err.message,
+    });
+  }
+}
+/* =========================
+   ORDERS HISTORY API 
+========================= */
+export async function getOrdersController(req, res) {
+  try {
+    const userId = String(req.user._id);
+    const {
+      accountId,
+      page = 1,
+      limit = 20,
+      symbol,
+      from,
+      to,
+    } = req.query;
+
+    if (!accountId) {
+      return res.status(400).json({
+        status: "error",
+        message: "accountId is required",
+      });
+    }
+
+    await verifyAccountOwnership(userId, accountId);
+
+    const result = await getOrdersService({
+      accountId,
+      page: Number(page),
+      limit: Number(limit),
+      symbol,
+      from,
+      to,
+    });
+
+    return res.json({
+      status: "success",
+      summary: result.summary,
+      pagination: result.pagination,
+      orders: result.orders,
+    });
+  } catch (err) {
+    return res.status(400).json({
+      status: "error",
+      message: err.message,
+    });
+  }
+}
+/* =========================
+   DEALS HISTORY API 
+========================= */
+export async function getDealsController(req, res) {
+  try {
+    const userId = String(req.user._id);
+    const {
+      accountId,
+      page = 1,
+      limit = 20,
+      symbol,
+      from,
+      to,
+    } = req.query;
+
+    if (!accountId) {
+      return res.status(400).json({
+        status: "error",
+        message: "accountId is required",
+      });
+    }
+
+    await verifyAccountOwnership(userId, accountId);
+
+    const data = await getDealsService({
+      accountId,
+      page: Number(page),
+      limit: Number(limit),
+      symbol,
+      from,
+      to,
+    });
+
+    return res.json({
+      status: "success",
+      summary: data.summary,
+      pagination: data.pagination,
+      deals: data.deals,
+    });
+  } catch (err) {
+    return res.status(400).json({
+      status: "error",
+      message: err.message,
+    });
+  }
+}
+/* =========================
+   TRADE SUMMARY PNL , DEPOSIT , BALANCE API 
+========================= */
+export async function getTradeSummaryController(req, res) {
+  try {
+    const userId = String(req.user._id);
+    const { accountId, from, to } = req.query;
+
+    if (!accountId) {
+      return res.status(400).json({
+        status: "error",
+        message: "accountId is required",
+      });
+    }
+
+    await verifyAccountOwnership(userId, accountId);
+
+    const summary = await getTradeSummaryService({
+      accountId,
+      from,
+      to,
+    });
+
+    return res.json({
+      status: "success",
+      summary,
+    });
+  } catch (err) {
+    return res.status(400).json({
+      status: "error",
+      message: err.message,
+    });
+  }
+}
+/* =========================
+   open TRADE POSITIONS HISTORY API 
+========================= */
+export async function getPositionsController(req, res) {
+  try {
+    const userId = String(req.user._id);
+    const {
+      accountId,
+      page = 1,
+      limit = 20,
+      symbol,
+      from,
+      to,
+      status, // OPEN / CLOSED
+    } = req.query;
+
+    if (!accountId) {
+      return res.status(400).json({
+        status: "error",
+        message: "accountId is required",
+      });
+    }
+
+    await verifyAccountOwnership(userId, accountId);
+
+    const result = await getPositionsService({
+      accountId,
+      page: Number(page),
+      limit: Number(limit),
+      symbol,
+      from,
+      to,
+      status,
+    });
+
+    return res.json({
+      status: "success",
+      pagination: result.pagination,
+      positions: result.positions,
     });
   } catch (err) {
     return res.status(400).json({

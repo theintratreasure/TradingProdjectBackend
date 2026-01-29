@@ -29,12 +29,11 @@ const TradeSchema = new mongoose.Schema(
        TRADE IDENTITY
     ========================== */
 
-    /** 🔑 ENGINE POSITION ID (CRITICAL) */
     positionId: {
       type: String,
       required: true,
-      index: true,
       unique: true,
+      index: true,
     },
 
     symbol: {
@@ -49,7 +48,6 @@ const TradeSchema = new mongoose.Schema(
       required: true,
     },
 
-    /** ✅ FULL ORDER TYPES (ENGINE MATCHED) */
     orderType: {
       type: String,
       enum: [
@@ -90,13 +88,11 @@ const TradeSchema = new mongoose.Schema(
       required: true,
     },
 
-    /** Actual executed price */
     openPrice: {
       type: Number,
       required: true,
     },
 
-    /** Used for pending orders */
     entryPrice: {
       type: Number,
       default: null,
@@ -122,7 +118,7 @@ const TradeSchema = new mongoose.Schema(
     },
 
     /* =========================
-       MARGIN & PNL
+       MARGIN & PNL (MT5 STYLE)
     ========================== */
 
     marginUsed: {
@@ -131,7 +127,25 @@ const TradeSchema = new mongoose.Schema(
       min: 0,
     },
 
-    /** 🔒 FINAL PNL (ENGINE CALCULATED ONLY) */
+    /** price movement PnL only */
+    grossPnL: {
+      type: Number,
+      default: 0,
+    },
+
+    /** broker commission */
+    commission: {
+      type: Number,
+      default: 0,
+    },
+
+    /** overnight swap (+ / -) */
+    swap: {
+      type: Number,
+      default: 0,
+    },
+
+    /** final net PnL */
     realizedPnL: {
       type: Number,
       default: 0,
@@ -185,7 +199,7 @@ const TradeSchema = new mongoose.Schema(
 );
 
 /* =========================
-   🔥 PERFORMANCE INDEXES
+   PERFORMANCE INDEXES
 ========================== */
 
 TradeSchema.index({ accountId: 1, status: 1 });

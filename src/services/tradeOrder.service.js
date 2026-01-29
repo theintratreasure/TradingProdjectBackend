@@ -1,0 +1,420 @@
+import mongoose from "mongoose";
+import Trade from "../models/Trade.model.js";
+import Transaction from "../models/Transaction.model.js";
+import Account from "../models/Account.model.js";
+export async function getOrdersService({
+  accountId,
+  page = 1,
+  limit = 20,
+  symbol,
+  from,
+  to,
+}) {
+  /* =========================
+     SAFE ObjectId CAST
+  ========================== */
+  const accountObjectId = new mongoose.Types.ObjectId(accountId);
+
+  /* =========================
+     BASE FILTER
+  ========================== */
+  const match = {
+    accountId: accountObjectId,
+    status: { $in: ["CLOSED", "CANCELLED"] },
+  };
+
+  if (symbol) {
+    match.symbol = symbol;
+  }
+
+  if (from || to) {
+    match.openTime = {};
+    if (from) match.openTime.$gte = new Date(from);
+    if (to) match.openTime.$lte = new Date(to);
+  }
+
+  /* =========================
+     SUMMARY
+  ========================== */
+  const summaryPipeline = [
+    { $match: match },
+    {
+      $group: {
+        _id: null,
+        totalOrders: { $sum: 1 },
+        totalFilled: {
+          $sum: { $cond: [{ $eq: ["$status", "CLOSED"] }, 1, 0] },
+        },
+        totalCancelled: {
+          $sum: { $cond: [{ $eq: ["$status", "CANCELLED"] }, 1, 0] },
+        },
+      },
+    },
+  ];
+
+  /* =========================
+     ORDERS LIST
+  ========================== */
+  const ordersQuery = Trade.find(match)
+    .sort({ openTime: -1 })
+    .skip((page - 1) * limit)
+    .limit(limit)
+    .select({
+      positionId: 1,
+      symbol: 1,
+      side: 1,
+      orderType: 1,
+      volume: 1,
+      status: 1,
+      stopLoss: 1,
+      takeProfit: 1,
+      openTime: 1,
+      closeTime: 1,
+    })
+    .lean();
+
+  const countQuery = Trade.countDocuments(match);
+
+  const [summaryAgg, orders, totalRecords] = await Promise.all([
+    Trade.aggregate(summaryPipeline),
+    ordersQuery,
+    countQuery,
+  ]);
+
+  const summary = summaryAgg[0] || {
+    totalOrders: 0,
+    totalFilled: 0,
+    totalCancelled: 0,
+  };
+
+  return {
+    summary: {
+      totalOrders: summary.totalOrders,
+      totalFilled: summary.totalFilled,
+      totalCancelled: summary.totalCancelled,
+      totalRejected: 0,
+    },
+    orders: orders.map((o) => ({
+      orderId: o.positionId,
+      symbol: o.symbol,
+      side: o.side,
+      orderType: o.orderType,
+      qty: o.volume,
+      status: o.status,
+      stopLoss: o.stopLoss,
+      takeProfit: o.takeProfit,
+      openTime: o.openTime,
+      closeTime: o.closeTime,
+    })),
+    pagination: {
+      page,
+      limit,
+      totalRecords,
+      totalPages:
+        totalRecords === 0 ? 0 : Math.ceil(totalRecords / limit),
+    },
+  };
+}
+
+export async function getDealsService({
+  accountId,
+  page = 1,
+  limit = 20,
+  symbol,
+  from,
+  to,
+}) {
+  const accountObjectId = new mongoose.Types.ObjectId(accountId);
+
+  /* =========================
+     BASE MATCH (ALL TRADES)
+  ========================== */
+  const match = {
+    accountId: accountObjectId,
+  };
+
+  if (symbol) {
+    match.symbol = symbol;
+  }
+
+  if (from || to) {
+    match.openTime = {};
+    if (from) match.openTime.$gte = new Date(from);
+    if (to) match.openTime.$lte = new Date(to);
+  }
+
+  /* =========================
+     FETCH TRADES
+  ========================== */
+  const trades = await Trade.find(match)
+    .sort({ openTime: -1 })
+    .lean();
+
+  /* =========================
+     BUILD MT5 DEALS (IN + OUT)
+  ========================== */
+  const deals = [];
+
+  for (const t of trades) {
+    // ---------- IN DEAL ----------
+    deals.push({
+      tradeId: t.positionId,
+      symbol: t.symbol,
+      type: t.side === "BUY" ? "BUY_IN" : "SELL_IN",
+      volume: t.volume,
+      price: t.openPrice,
+      date: t.openTime,
+      swap: 0,
+      commission: 0,
+      pnl: 0,
+    });
+
+    // ---------- OUT DEAL ----------
+    if (t.status === "CLOSED" && t.closeTime) {
+      deals.push({
+        tradeId: t.positionId,
+        symbol: t.symbol,
+        type: t.side === "BUY" ? "SELL_OUT" : "BUY_OUT",
+        volume: t.volume,
+        price: t.closePrice,
+        date: t.closeTime,
+        swap: t.swap || 0,
+        commission: t.commission || 0,
+        pnl: t.realizedPnL || 0,
+      });
+    }
+  }
+
+  /* =========================
+     SORT DEALS BY TIME (DESC)
+  ========================== */
+  deals.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  /* =========================
+     PAGINATION
+  ========================== */
+  const totalRecords = deals.length;
+  const start = (page - 1) * limit;
+  const paginatedDeals = deals.slice(start, start + limit);
+
+  return {
+    summary: {}, // intentionally empty (as requested)
+    deals: paginatedDeals,
+    pagination: {
+      page,
+      limit,
+      totalRecords,
+      totalPages:
+        totalRecords === 0 ? 0 : Math.ceil(totalRecords / limit),
+    },
+  };
+}
+
+export async function getTradeSummaryService({ accountId, from, to }) {
+  const accountObjectId = new mongoose.Types.ObjectId(accountId);
+
+  /* =========================
+     DATE FILTER
+  ========================== */
+  const dateFilter = {};
+  if (from) dateFilter.$gte = new Date(from);
+  if (to) dateFilter.$lte = new Date(to);
+
+  const baseMatch = {
+    account: accountObjectId,
+    status: "SUCCESS",
+    ...(from || to ? { createdAt: dateFilter } : {}),
+  };
+
+  /* =========================
+     TRANSACTION AGGREGATION
+  ========================== */
+  const summaryPipeline = [
+    { $match: baseMatch },
+    {
+      $group: {
+        _id: null,
+
+        /* -------- DEPOSIT -------- */
+        totalDeposit: {
+          $sum: {
+            $cond: [
+              {
+                $in: [
+                  "$type",
+                  ["DEPOSIT", "INTERNAL_TRANSFER_IN"],
+                ],
+              },
+              "$amount",
+              0,
+            ],
+          },
+        },
+
+        /* -------- NET TRADING PNL -------- */
+        totalPnL: {
+          $sum: {
+            $cond: [
+              { $eq: ["$type", "TRADE_PROFIT"] },
+              "$amount",
+              {
+                $cond: [
+                  { $eq: ["$type", "TRADE_LOSS"] },
+                  { $multiply: ["$amount", -1] },
+                  0,
+                ],
+              },
+            ],
+          },
+        },
+
+        /* -------- COMMISSION -------- */
+        totalCommission: {
+          $sum: {
+            $cond: [
+              {
+                $and: [
+                  { $eq: ["$referenceType", "ORDER"] },
+                  { $regexMatch: { input: "$remark", regex: /commission/i } },
+                ],
+              },
+              "$amount",
+              0,
+            ],
+          },
+        },
+
+        /* -------- SWAP -------- */
+        totalSwap: {
+          $sum: {
+            $cond: [
+              {
+                $and: [
+                  { $eq: ["$referenceType", "ORDER"] },
+                  { $regexMatch: { input: "$remark", regex: /swap/i } },
+                ],
+              },
+              "$amount",
+              0,
+            ],
+          },
+        },
+      },
+    },
+  ];
+
+  const [aggResult, account] = await Promise.all([
+    Transaction.aggregate(summaryPipeline),
+    Account.findById(accountObjectId)
+      .select({ balance: 1 })
+      .lean(),
+  ]);
+
+  const totals = aggResult[0] || {
+    totalDeposit: 0,
+    totalPnL: 0,
+    totalCommission: 0,
+    totalSwap: 0,
+  };
+
+  return {
+    totalDeposit: Number(totals.totalDeposit.toFixed(2)),
+    totalPnL: Number(totals.totalPnL.toFixed(2)),
+    totalCommission: Number(totals.totalCommission.toFixed(2)),
+    totalSwap: Number(totals.totalSwap.toFixed(2)),
+    balance: account ? Number(account.balance.toFixed(2)) : 0,
+  };
+}
+export async function getPositionsService({
+  accountId,
+  page,
+  limit,
+  symbol,
+  from,
+  to,
+  status,
+}) {
+  const accountObjectId = new mongoose.Types.ObjectId(accountId);
+
+  /* =========================
+     BASE FILTER
+  ========================== */
+  const match = {
+    accountId: accountObjectId,
+  };
+
+  if (symbol) {
+    match.symbol = symbol;
+  }
+
+  if (status && ["OPEN", "CLOSED"].includes(status)) {
+    match.status = status;
+  }
+
+  if (from || to) {
+    match.openTime = {};
+    if (from) match.openTime.$gte = new Date(from);
+    if (to) match.openTime.$lte = new Date(to);
+  }
+
+  /* =========================
+     QUERY
+  ========================== */
+  const positionsQuery = Trade.find(match)
+    .sort({ openTime: -1 })
+    .skip((page - 1) * limit)
+    .limit(limit)
+    .select({
+      positionId: 1,
+      symbol: 1,
+      side: 1,
+      volume: 1,
+      openPrice: 1,
+      closePrice: 1,
+      openTime: 1,
+      closeTime: 1,
+      stopLoss: 1,
+      takeProfit: 1,
+      swap: 1,
+      commission: 1,
+      status: 1,
+    })
+    .lean();
+
+  const countQuery = Trade.countDocuments(match);
+
+  const [positions, totalRecords] = await Promise.all([
+    positionsQuery,
+    countQuery,
+  ]);
+
+  /* =========================
+     FORMAT RESPONSE (MT5 STYLE)
+  ========================== */
+  const formatted = positions.map((p) => ({
+    orderId: p.positionId,
+    symbol: p.symbol,
+    qty: p.volume,
+    side: p.side,
+    openPrice: p.openPrice,
+    closePrice: p.closePrice,
+    openTime: p.openTime,
+    closeTime: p.closeTime,
+    stopLoss: p.stopLoss,
+    takeProfit: p.takeProfit,
+    swap: p.swap || 0,
+    commission: p.commission || 0,
+    status: p.status,
+  }));
+
+  return {
+    positions: formatted,
+    pagination: {
+      page,
+      limit,
+      totalRecords,
+      totalPages:
+        totalRecords === 0 ? 0 : Math.ceil(totalRecords / limit),
+    },
+  };
+}

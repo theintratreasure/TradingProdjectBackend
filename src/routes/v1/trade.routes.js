@@ -7,6 +7,10 @@ import {
   modifyPendingOrderController,
   closePosition,
   cancelPendingOrderController,
+  getOrdersController,
+  getDealsController,
+  getTradeSummaryController,
+  getPositionsController,
 } from "../../controllers/trade.controller.js";
 
 const router = Router();
@@ -38,4 +42,15 @@ router.patch("/position/modify", authMiddleware, modifyPositionController);
 // CLOSE TRADE (manual close)
 router.post("/position/close", authMiddleware, closePosition);
 
+// trade orders history (closed / cancelled)
+router.get("/orders",authMiddleware,getOrdersController);
+
+// trade deals (filled orders)
+router.get("/deals", authMiddleware, getDealsController);
+
+// trade summary (PNL, commissions, swaps)
+router.get("/summary", authMiddleware, getTradeSummaryController);
+
+// trade positions (open trades) execution history
+router.get("/positions", authMiddleware, getPositionsController);
 export default router;

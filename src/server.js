@@ -6,7 +6,7 @@ import app from "./app.js";
 
 import { connectDB } from "./config/database.js";
 import { startMarketCron } from "./jobs/market.cron.js";
-// import { attachMarketWS } from "./ws/market.js";
+import { attachMarketWS } from "./ws/market.js";
 
 // 🔥 TRADE ENGINE
 import { bootstrapEngine, tradeEngine } from "./trade-engine/bootstrap.js";
@@ -63,7 +63,7 @@ async function start() {
   // =========================
   // 5️⃣ ATTACH MARKET WS
   // =========================
-  // attachMarketWS(server);
+  attachMarketWS(server);
 
   // =========================
   // 6️⃣ START SERVER
