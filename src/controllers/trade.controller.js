@@ -23,10 +23,22 @@ async function verifyAccountOwnership(userId, accountId) {
 }
 
 /* =========================
+   WATCH SESSION GUARD
+   (NON-GET APIs ONLY)
+========================= */
+function rejectWatchSession(req) {
+  if (req.account?.sessionType === "WATCH") {
+    throw new Error("You do not have trade permission");
+  }
+}
+
+/* =========================
    MARKET ORDER (BUY / SELL)
 ========================= */
 export async function placeMarketOrderController(req, res) {
   try {
+    rejectWatchSession(req);
+
     const { userId, accountId } = req.account;
     const { symbol, side, volume, stopLoss, takeProfit } = req.body;
 
@@ -55,10 +67,7 @@ export async function placeMarketOrderController(req, res) {
       takeProfit: typeof takeProfit === "number" ? takeProfit : null,
     });
 
-    return res.json({
-      status: "success",
-      data: position,
-    });
+    return res.json({ status: "success", data: position });
   } catch (err) {
     return res.status(400).json({
       status: "error",
@@ -72,6 +81,8 @@ export async function placeMarketOrderController(req, res) {
 ========================= */
 export async function closePosition(req, res) {
   try {
+    rejectWatchSession(req);
+
     const { userId, accountId } = req.account;
     const { positionId } = req.body;
 
@@ -90,10 +101,7 @@ export async function closePosition(req, res) {
       reason: "MANUAL_CLOSE",
     });
 
-    return res.json({
-      status: "success",
-      data: result,
-    });
+    return res.json({ status: "success", data: result });
   } catch (err) {
     return res.status(400).json({
       status: "error",
@@ -107,6 +115,8 @@ export async function closePosition(req, res) {
 ========================= */
 export async function placePendingOrderController(req, res) {
   try {
+    rejectWatchSession(req);
+
     const { userId, accountId } = req.account;
     const {
       symbol,
@@ -139,10 +149,7 @@ export async function placePendingOrderController(req, res) {
       takeProfit: typeof takeProfit === "number" ? takeProfit : null,
     });
 
-    return res.json({
-      status: "success",
-      data: order,
-    });
+    return res.json({ status: "success", data: order });
   } catch (err) {
     return res.status(400).json({
       status: "error",
@@ -156,6 +163,8 @@ export async function placePendingOrderController(req, res) {
 ========================= */
 export async function modifyPositionController(req, res) {
   try {
+    rejectWatchSession(req);
+
     const { userId, accountId } = req.account;
     const { positionId, stopLoss, takeProfit } = req.body;
 
@@ -189,6 +198,8 @@ export async function modifyPositionController(req, res) {
 ========================= */
 export async function modifyPendingOrderController(req, res) {
   try {
+    rejectWatchSession(req);
+
     const { userId, accountId } = req.account;
     const { orderId, price, stopLoss, takeProfit } = req.body;
 
@@ -223,6 +234,8 @@ export async function modifyPendingOrderController(req, res) {
 ========================= */
 export async function cancelPendingOrderController(req, res) {
   try {
+    rejectWatchSession(req);
+
     const { userId, accountId } = req.account;
     const { orderId } = req.body;
 
@@ -235,10 +248,7 @@ export async function cancelPendingOrderController(req, res) {
 
     await verifyAccountOwnership(userId, accountId);
 
-    tradeEngine.cancelPendingOrder({
-      accountId,
-      orderId,
-    });
+    tradeEngine.cancelPendingOrder({ accountId, orderId });
 
     return res.json({ status: "success" });
   } catch (err) {
@@ -250,11 +260,12 @@ export async function cancelPendingOrderController(req, res) {
 }
 
 /* =========================
-   ORDERS HISTORY
+   ORDERS HISTORY (GET)
 ========================= */
 export async function getOrdersController(req, res) {
   try {
     const { userId, accountId } = req.account;
+    console.log("ACCOUNT ID IN GET ORDERS:", accountId);
     const { page = 1, limit = 20, symbol, from, to } = req.query;
 
     await verifyAccountOwnership(userId, accountId);
@@ -268,10 +279,7 @@ export async function getOrdersController(req, res) {
       to,
     });
 
-    return res.json({
-      status: "success",
-      ...result,
-    });
+    return res.json({ status: "success", ...result });
   } catch (err) {
     return res.status(400).json({
       status: "error",
@@ -281,7 +289,7 @@ export async function getOrdersController(req, res) {
 }
 
 /* =========================
-   DEALS HISTORY
+   DEALS HISTORY (GET)
 ========================= */
 export async function getDealsController(req, res) {
   try {
@@ -299,10 +307,7 @@ export async function getDealsController(req, res) {
       to,
     });
 
-    return res.json({
-      status: "success",
-      ...data,
-    });
+    return res.json({ status: "success", ...data });
   } catch (err) {
     return res.status(400).json({
       status: "error",
@@ -312,7 +317,7 @@ export async function getDealsController(req, res) {
 }
 
 /* =========================
-   TRADE SUMMARY
+   TRADE SUMMARY (GET)
 ========================= */
 export async function getTradeSummaryController(req, res) {
   try {
@@ -321,16 +326,9 @@ export async function getTradeSummaryController(req, res) {
 
     await verifyAccountOwnership(userId, accountId);
 
-    const summary = await getTradeSummaryService({
-      accountId,
-      from,
-      to,
-    });
+    const summary = await getTradeSummaryService({ accountId, from, to });
 
-    return res.json({
-      status: "success",
-      summary,
-    });
+    return res.json({ status: "success", summary });
   } catch (err) {
     return res.status(400).json({
       status: "error",
@@ -340,19 +338,12 @@ export async function getTradeSummaryController(req, res) {
 }
 
 /* =========================
-   OPEN POSITIONS
+   OPEN POSITIONS (GET)
 ========================= */
 export async function getPositionsController(req, res) {
   try {
     const { userId, accountId } = req.account;
-    const {
-      page = 1,
-      limit = 20,
-      symbol,
-      from,
-      to,
-      status,
-    } = req.query;
+    const { page = 1, limit = 20, symbol, from, to, status } = req.query;
 
     await verifyAccountOwnership(userId, accountId);
 
@@ -366,10 +357,7 @@ export async function getPositionsController(req, res) {
       status,
     });
 
-    return res.json({
-      status: "success",
-      ...result,
-    });
+    return res.json({ status: "success", ...result });
   } catch (err) {
     return res.status(400).json({
       status: "error",

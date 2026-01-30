@@ -1,4 +1,3 @@
-// src/ws/market.js
 import { WebSocketServer } from "ws";
 import {
   registerClient,
@@ -7,18 +6,31 @@ import {
 } from "./alltick.ws.js";
 
 /**
- * Attach WebSocket market endpoint to HTTP server
+ * Single WebSocket server that supports both routes.
+ *
+ * Connect to:
+ *   - wss://<host>/ws/market   (auto-joins market route)
+ *   - wss://<host>/ws/account  (auto-joins account route)
+ *
+ * This keeps a single process WebSocket listener. When you run multiple Node workers
+ * behind a load balancer, each worker will subscribe to Redis and forward only relevant events.
  */
 export function attachMarketWS(server) {
-  const wss = new WebSocketServer({ server, path: "/ws/market" });
+  const wss = new WebSocketServer({ server });
 
-  wss.on("connection", (ws) => {
+  wss.on("connection", (ws, req) => {
     const id = registerClient(ws);
-    console.log(`[WS] Client connected: ${id}`);
 
-    ws.send(
-      JSON.stringify({ status: "connected", message: "Connected to Market WS" })
-    );
+    // detect route from requested URL path
+    const url = req?.url || "";
+    if (url.startsWith("/ws/market")) ws.routes.add("market");
+    if (url.startsWith("/ws/account")) ws.routes.add("account");
+
+    console.log(`[WS] Client connected: ${id} routes=${Array.from(ws.routes).join(",")}`);
+
+    try {
+      ws.send(JSON.stringify({ status: "connected", routes: Array.from(ws.routes) }));
+    } catch {}
 
     ws.on("message", (msg) => {
       handleClientMessage(ws, msg.toString());
@@ -34,5 +46,5 @@ export function attachMarketWS(server) {
     });
   });
 
-  console.log("[WS] Market WebSocket attached at /ws/market");
+  console.log("[WS] Single WebSocket attached for /ws/market & /ws/account");
 }

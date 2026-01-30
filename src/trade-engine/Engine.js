@@ -126,16 +126,6 @@ export class Engine {
       throw new Error("Insufficient margin");
     }
 
-    console.log("[ENGINE][MARKET_OPEN]", {
-      accountId,
-      symbol,
-      side,
-      volume,
-      openPrice,
-      stopLoss,
-      takeProfit,
-    });
-
     ledgerQueue.enqueue("TRADE_OPEN", {
       userId: account.userId,
       accountId,
@@ -176,15 +166,13 @@ export class Engine {
     };
 
     account.pendingOrders.set(order.orderId, order);
-
-    console.log("[ENGINE][PENDING_CREATED]", order);
-
     ledgerQueue.enqueue("ORDER_PENDING_CREATE", order);
+
     return order;
   }
 
   /* =========================
-     PRICE TICK (FULL LIVE DEBUG)
+     PRICE TICK (LIVE)
   ========================== */
 
   onTick(symbol, bid, ask) {
@@ -195,41 +183,22 @@ export class Engine {
     sym.ask = ask;
     sym.lastTickAt = Date.now();
 
-    console.log("[TICK]", { symbol, bid, ask });
-
     for (const account of this.accounts.values()) {
 
-      /* ===== PENDING ORDERS DEBUG ===== */
+      /* ===== PENDING ORDERS ===== */
       if (account.pendingOrders?.size) {
         for (const order of account.pendingOrders.values()) {
           if (order.symbol !== symbol) continue;
 
-          const currentPrice =
-            order.side === "BUY" ? ask : bid;
+          const price = order.side === "BUY" ? ask : bid;
 
-          const gap = Number(
-            Math.abs(currentPrice - order.price).toFixed(5)
-          );
-
-          const willHit =
+          const hit =
             (order.orderType === "BUY_LIMIT" && ask <= order.price) ||
             (order.orderType === "SELL_LIMIT" && bid >= order.price) ||
             (order.orderType === "BUY_STOP" && ask >= order.price) ||
             (order.orderType === "SELL_STOP" && bid <= order.price);
 
-          console.log("[LIVE][PENDING]", {
-            accountId: account.accountId,
-            orderId: order.orderId,
-            type: order.orderType,
-            triggerPrice: order.price,
-            currentPrice,
-            gapToTrigger: gap,
-            willHit,
-          });
-
-          if (!willHit) continue;
-
-          console.log("[ENGINE][PENDING_HIT]", order.orderId);
+          if (!hit) continue;
 
           account.pendingOrders.delete(order.orderId);
           ledgerQueue.enqueue("ORDER_PENDING_EXECUTE", order);
@@ -245,59 +214,48 @@ export class Engine {
         }
       }
 
-      /* ===== OPEN POSITIONS DEBUG ===== */
-      if (account.positions.size === 0) continue;
-
+      /* ===== OPEN POSITIONS ===== */
       for (const pos of account.positions.values()) {
         if (pos.symbol !== symbol) continue;
 
         pos.updatePnL(bid, ask);
-        const price = pos.side === "BUY" ? bid : ask;
+        const currentPrice = pos.side === "BUY" ? bid : ask;
 
-        const slGap =
-          pos.stopLoss != null
-            ? Number(Math.abs(price - pos.stopLoss).toFixed(5))
-            : null;
-
-        const tpGap =
-          pos.takeProfit != null
-            ? Number(Math.abs(pos.takeProfit - price).toFixed(5))
-            : null;
-
-        console.log("[LIVE][POSITION]", {
+        // 🔥 LIVE POSITION (WS)
+        engineEvents.emit("LIVE_POSITION", {
           accountId: account.accountId,
           positionId: pos.positionId,
+          symbol: pos.symbol,
           side: pos.side,
           openPrice: pos.openPrice,
-          currentPrice: price,
+          currentPrice,
           floatingPnL: Number(pos.floatingPnL.toFixed(2)),
-          slGap,
-          tpGap,
+          stopLoss: pos.stopLoss,
+          takeProfit: pos.takeProfit,
         });
 
         if (
           pos.stopLoss !== null &&
-          ((pos.side === "BUY" && price <= pos.stopLoss) ||
-           (pos.side === "SELL" && price >= pos.stopLoss))
+          ((pos.side === "BUY" && currentPrice <= pos.stopLoss) ||
+           (pos.side === "SELL" && currentPrice >= pos.stopLoss))
         ) {
-          console.log("[ENGINE][STOP_LOSS_HIT]", pos.positionId);
           this.closePositionInternal(account, pos, "STOP_LOSS", sym);
           continue;
         }
 
         if (
           pos.takeProfit !== null &&
-          ((pos.side === "BUY" && price >= pos.takeProfit) ||
-           (pos.side === "SELL" && price <= pos.takeProfit))
+          ((pos.side === "BUY" && currentPrice >= pos.takeProfit) ||
+           (pos.side === "SELL" && currentPrice <= pos.takeProfit))
         ) {
-          console.log("[ENGINE][TAKE_PROFIT_HIT]", pos.positionId);
           this.closePositionInternal(account, pos, "TAKE_PROFIT", sym);
         }
       }
 
       this.recalcUsedMargin(account);
 
-      console.log("[LIVE][ACCOUNT]", {
+      // 🔥 LIVE ACCOUNT (WS)
+      engineEvents.emit("LIVE_ACCOUNT", {
         accountId: account.accountId,
         balance: Number(account.balance.toFixed(2)),
         equity: Number(account.equity.toFixed(2)),
@@ -306,7 +264,6 @@ export class Engine {
       });
 
       if (RiskManager.shouldStopOut(account)) {
-        console.log("[ENGINE][STOP_OUT_TRIGGERED]", account.accountId);
         this.forceCloseWorst(account);
       }
     }
