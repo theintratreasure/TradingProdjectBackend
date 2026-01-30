@@ -4,6 +4,7 @@ import {
   getDealsService,
   getOrdersService,
   getPositionsService,
+  getSingleAccountService,
   getTradeSummaryService,
 } from "../services/tradeOrder.service.js";
 
@@ -362,6 +363,29 @@ export async function getPositionsController(req, res) {
     return res.status(400).json({
       status: "error",
       message: err.message,
+    });
+  }
+}
+
+/* =========================
+   GET SINGLE ACCOUNT
+========================= */
+export async function getSingleAccountController(req, res) {
+  try {
+    const { userId, accountId } = req.account;
+
+    await verifyAccountOwnership(userId, accountId);
+
+    const data = await getSingleAccountService(accountId);
+
+    return res.json({
+      status: "success",
+      data,
+    });
+  } catch (err) {
+    return res.status(400).json({
+      status: "error",
+      message: err.message || "Failed to load account",
     });
   }
 }

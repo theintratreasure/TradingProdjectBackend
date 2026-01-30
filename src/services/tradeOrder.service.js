@@ -418,3 +418,76 @@ export async function getPositionsService({
     },
   };
 }
+
+/* =========================
+   GET FULL ACCOUNT DETAILS
+========================= */
+export async function getSingleAccountService(accountId) {
+  const accountObjectId = new mongoose.Types.ObjectId(accountId);
+
+  /* =========================
+     FETCH ACCOUNT
+  ========================== */
+  const account = await Account.findById(accountObjectId)
+    .select({
+      user_id: 1,
+
+      account_number: 1,
+      account_type: 1,
+
+      plan_name: 1,
+      leverage: 1,
+      spread_type: 1,
+      spread_pips: 1,
+      commission_per_lot: 1,
+      swap_enabled: 1,
+
+      balance: 1,
+      hold_balance: 1,
+      equity: 1,
+      currency: 1,
+
+      first_deposit: 1,
+      status: 1,
+
+      createdAt: 1,
+      updatedAt: 1,
+    })
+    .lean();
+
+  if (!account) {
+    throw new Error("Account not found");
+  }
+
+  /* =========================
+     FORMAT RESPONSE
+  ========================== */
+  return {
+    accountId: account._id,
+    userId: account.user_id,
+
+    accountNumber: account.account_number,
+    accountType: account.account_type,
+
+    planName: account.plan_name,
+    leverage: account.leverage,
+
+    spreadType: account.spread_type,
+    spreadPips: account.spread_pips,
+
+    commissionPerLot: Number(account.commission_per_lot.toFixed(2)),
+    swapEnabled: account.swap_enabled,
+
+    balance: Number(account.balance.toFixed(2)),
+    holdBalance: Number(account.hold_balance.toFixed(2)),
+    equity: Number(account.equity.toFixed(2)),
+
+    currency: account.currency,
+
+    firstDeposit: account.first_deposit,
+    status: account.status,
+
+    createdAt: account.createdAt,
+    updatedAt: account.updatedAt,
+  };
+}
