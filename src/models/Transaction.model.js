@@ -55,7 +55,7 @@ const TransactionSchema = new mongoose.Schema(
     //  REFERENCE TYPE (FOR DEBUGGING & AUDIT)
     referenceType: {
       type: String,
-      enum: ["DEPOSIT", "WITHDRAWAL", "ORDER", "SYSTEM",'INTERNAL_TRANSFER'],
+      enum: ["DEPOSIT", "WITHDRAWAL", "ORDER", "SYSTEM",'INTERNAL_TRANSFER',"TRADE"],
       index: true,
     },
     //  REFERENCE ID (DEPOSIT ID / WITHDRAW ID / ORDER ID)

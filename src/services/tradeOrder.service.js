@@ -389,23 +389,49 @@ export async function getPositionsService({
   ]);
 
   /* =========================
-     FORMAT RESPONSE (MT5 STYLE)
+     FORMAT RESPONSE (WITH P/L)
   ========================== */
-  const formatted = positions.map((p) => ({
-    orderId: p.positionId,
-    symbol: p.symbol,
-    qty: p.volume,
-    side: p.side,
-    openPrice: p.openPrice,
-    closePrice: p.closePrice,
-    openTime: p.openTime,
-    closeTime: p.closeTime,
-    stopLoss: p.stopLoss,
-    takeProfit: p.takeProfit,
-    swap: p.swap || 0,
-    commission: p.commission || 0,
-    status: p.status,
-  }));
+  const formatted = positions.map((p) => {
+    let profitLoss = 0;
+
+    // ✅ Only calculate for CLOSED trades
+    if (p.status === "CLOSED" && p.closePrice) {
+      if (p.side === "BUY") {
+        profitLoss = (p.closePrice - p.openPrice) * p.volume;
+      }
+
+      if (p.side === "SELL") {
+        profitLoss = (p.openPrice - p.closePrice) * p.volume;
+      }
+    }
+
+    // Deduct commission & swap
+    profitLoss =
+      profitLoss - (p.commission || 0) - (p.swap || 0);
+
+    return {
+      orderId: p.positionId,
+      symbol: p.symbol,
+      qty: p.volume,
+      side: p.side,
+
+      openPrice: p.openPrice,
+      closePrice: p.closePrice,
+
+      openTime: p.openTime,
+      closeTime: p.closeTime,
+
+      stopLoss: p.stopLoss,
+      takeProfit: p.takeProfit,
+
+      swap: p.swap || 0,
+      commission: p.commission || 0,
+
+      profitLoss: Number(profitLoss.toFixed(2)), // ✅ ADD
+
+      status: p.status,
+    };
+  });
 
   return {
     positions: formatted,
@@ -414,7 +440,9 @@ export async function getPositionsService({
       limit,
       totalRecords,
       totalPages:
-        totalRecords === 0 ? 0 : Math.ceil(totalRecords / limit),
+        totalRecords === 0
+          ? 0
+          : Math.ceil(totalRecords / limit),
     },
   };
 }

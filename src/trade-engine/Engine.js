@@ -1,3 +1,5 @@
+// src/trade-engine/Engine.js
+
 import { v4 as uuidv4 } from "uuid";
 import { AccountState } from "./AccountState.js";
 import { Position } from "./Position.js";
@@ -53,6 +55,55 @@ export class Engine {
   }
 
   /* =========================
+     RESTORE FROM DB
+  ========================== */
+
+  loadOpenPosition(trade) {
+    const account = this.accounts.get(String(trade.accountId));
+    if (!account) return;
+
+    const position = new Position({
+      positionId: trade.positionId,
+      accountId: String(trade.accountId),
+      symbol: trade.symbol,
+      side: trade.side,
+      volume: trade.volume,
+      openPrice: trade.openPrice,
+      contractSize: trade.contractSize,
+      leverage: trade.leverage,
+      stopLoss: trade.stopLoss,
+      takeProfit: trade.takeProfit,
+    });
+
+    account.positions.set(position.positionId, position);
+  }
+
+  loadPendingOrder(order) {
+    const account = this.accounts.get(String(order.accountId));
+    if (!account) return;
+
+    if (!account.pendingOrders) {
+      account.pendingOrders = new Map();
+    }
+
+    account.pendingOrders.set(order.orderId, {
+      orderId: order.orderId,
+      userId: order.userId,
+      accountId: String(order.accountId),
+      symbol: order.symbol,
+      side: order.side,
+      orderType: order.orderType,
+      price: order.price,
+      volume: order.volume,
+      stopLoss: order.stopLoss,
+      takeProfit: order.takeProfit,
+      createdAt: order.createdAt
+        ? new Date(order.createdAt).getTime()
+        : Date.now(),
+    });
+  }
+
+  /* =========================
      HEDGED MARGIN
   ========================== */
 
@@ -69,7 +120,9 @@ export class Engine {
           leverage: pos.leverage,
         });
       }
+
       const b = buckets.get(pos.symbol);
+
       if (pos.side === "BUY") b.buy += pos.volume;
       else b.sell += pos.volume;
     }
@@ -82,6 +135,7 @@ export class Engine {
       if (net <= 0) continue;
 
       const price = b.buy > b.sell ? sym.ask : sym.bid;
+
       totalMargin += (net * b.contractSize * price) / b.leverage;
     }
 
@@ -118,6 +172,7 @@ export class Engine {
     });
 
     account.positions.set(position.positionId, position);
+
     this.recalcUsedMargin(account);
 
     if (account.freeMargin < 0) {
@@ -152,6 +207,7 @@ export class Engine {
 
   placePendingOrder(data) {
     const account = this.accounts.get(data.accountId);
+
     if (!account) throw new Error("Invalid trading account");
 
     if (!account.pendingOrders) {
@@ -166,13 +222,14 @@ export class Engine {
     };
 
     account.pendingOrders.set(order.orderId, order);
+
     ledgerQueue.enqueue("ORDER_PENDING_CREATE", order);
 
     return order;
   }
 
   /* =========================
-     PRICE TICK (LIVE)
+     PRICE TICK
   ========================== */
 
   onTick(symbol, bid, ask) {
@@ -185,12 +242,11 @@ export class Engine {
 
     for (const account of this.accounts.values()) {
 
-      /* ===== PENDING ORDERS ===== */
+      /* === PENDING === */
       if (account.pendingOrders?.size) {
         for (const order of account.pendingOrders.values()) {
-          if (order.symbol !== symbol) continue;
 
-          const price = order.side === "BUY" ? ask : bid;
+          if (order.symbol !== symbol) continue;
 
           const hit =
             (order.orderType === "BUY_LIMIT" && ask <= order.price) ||
@@ -201,6 +257,7 @@ export class Engine {
           if (!hit) continue;
 
           account.pendingOrders.delete(order.orderId);
+
           ledgerQueue.enqueue("ORDER_PENDING_EXECUTE", order);
 
           this.placeMarketOrder({
@@ -214,14 +271,15 @@ export class Engine {
         }
       }
 
-      /* ===== OPEN POSITIONS ===== */
+      /* === POSITIONS === */
       for (const pos of account.positions.values()) {
+
         if (pos.symbol !== symbol) continue;
 
         pos.updatePnL(bid, ask);
+
         const currentPrice = pos.side === "BUY" ? bid : ask;
 
-        // 🔥 LIVE POSITION (WS)
         engineEvents.emit("LIVE_POSITION", {
           accountId: account.accountId,
           positionId: pos.positionId,
@@ -254,7 +312,6 @@ export class Engine {
 
       this.recalcUsedMargin(account);
 
-      // 🔥 LIVE ACCOUNT (WS)
       engineEvents.emit("LIVE_ACCOUNT", {
         accountId: account.accountId,
         balance: Number(account.balance.toFixed(2)),
@@ -270,14 +327,16 @@ export class Engine {
   }
 
   /* =========================
-     INTERNAL CLOSE
+     CLOSE
   ========================== */
 
   closePositionInternal(account, pos, reason, sym) {
     pos.updatePnL(sym.bid, sym.ask);
 
     account.positions.delete(pos.positionId);
+
     account.balance += pos.floatingPnL;
+
     this.recalcUsedMargin(account);
 
     ledgerQueue.enqueue("TRADE_CLOSE", {
@@ -298,20 +357,25 @@ export class Engine {
         worst = pos;
       }
     }
+
     if (!worst) return;
 
     const sym = this.symbols.get(worst.symbol);
+
     this.closePositionInternal(account, worst, "STOP_OUT", sym);
   }
 
   squareOffPosition({ accountId, positionId, reason = "MANUAL" }) {
     const account = this.accounts.get(accountId);
+
     if (!account) throw new Error("Account not found");
 
     const pos = account.positions.get(positionId);
+
     if (!pos) throw new Error("Position not found");
 
     const sym = this.symbols.get(pos.symbol);
+
     this.closePositionInternal(account, pos, reason, sym);
 
     return {
