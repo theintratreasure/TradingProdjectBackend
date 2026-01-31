@@ -97,6 +97,12 @@ export class Engine {
       volume: order.volume,
       stopLoss: order.stopLoss,
       takeProfit: order.takeProfit,
+
+      expireType: order.expireType || "GTC",
+      expireAt: order.expireAt
+        ? new Date(order.expireAt).getTime()
+        : null,
+
       createdAt: order.createdAt
         ? new Date(order.createdAt).getTime()
         : Date.now(),
@@ -214,11 +220,38 @@ export class Engine {
       account.pendingOrders = new Map();
     }
 
+    const now = Date.now();
+
+    let expireAt = null;
+
+    if (data.expireType === "TODAY") {
+      const end = new Date();
+      end.setHours(23, 59, 59, 999);
+      expireAt = end.getTime();
+    }
+
+    if (data.expireType === "TIME" && data.expireAt) {
+      expireAt = new Date(data.expireAt).getTime();
+    }
+
     const order = {
       orderId: uuidv4(),
       userId: account.userId,
-      ...data,
-      createdAt: Date.now(),
+
+      accountId: data.accountId,
+      symbol: data.symbol,
+      side: data.side,
+      orderType: data.orderType,
+      price: data.price,
+      volume: data.volume,
+
+      stopLoss: data.stopLoss,
+      takeProfit: data.takeProfit,
+
+      expireType: data.expireType || "GTC",
+      expireAt,
+
+      createdAt: now,
     };
 
     account.pendingOrders.set(order.orderId, order);
@@ -244,7 +277,23 @@ export class Engine {
 
       /* === PENDING === */
       if (account.pendingOrders?.size) {
+
+        const now = Date.now();
+
         for (const order of account.pendingOrders.values()) {
+
+          /* ===== EXPIRE CHECK ===== */
+          if (order.expireAt && now >= order.expireAt) {
+
+            account.pendingOrders.delete(order.orderId);
+
+            ledgerQueue.enqueue("ORDER_PENDING_CANCEL", {
+              orderId: order.orderId,
+              reason: "EXPIRED",
+            });
+
+            continue;
+          }
 
           if (order.symbol !== symbol) continue;
 
