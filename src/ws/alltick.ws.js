@@ -27,8 +27,8 @@ const redisPub = new Redis(REDIS_URL);
 const redisSub = new Redis(REDIS_URL);
 
 redisSub.subscribe(REDIS_CHANNEL, (err) => {
-  if (err) console.error("[REDIS] subscribe error", err);
-  else console.log("[REDIS] subscribed to", REDIS_CHANNEL);
+  if (err) console.error("[ALLTICK-MGR][REDIS] subscribe error", err);
+  else console.log("[ALLTICK-MGR] subscribed to", REDIS_CHANNEL);
 });
 
 // ========================
@@ -44,6 +44,12 @@ const normalizeSymbol = (v) =>
     .toUpperCase();
 const makeKey = (market, symbol) =>
   `${normalizeMarket(market)}:${normalizeSymbol(symbol)}`;
+
+const DBG = (...args) => {
+  try {
+    console.debug.apply(console, ["[ALLTICK-MGR]", ...args]);
+  } catch {}
+};
 
 // ========================
 // AllTick WS Manager
@@ -80,12 +86,10 @@ class AlltickWS extends EventEmitter {
       return;
     }
 
-    // Prevent duplicate attempts if already connected or connecting
     if (this.connected || this.isConnecting) return;
     this.isConnecting = true;
     this.manualClose = false;
 
-    // Clean-up previous client if any
     if (this.client) {
       try {
         this.client.removeAllListeners();
@@ -124,20 +128,19 @@ class AlltickWS extends EventEmitter {
 
         if (json.cmd_id === 22999 && json.data) {
           this.emit("data", json.data);
+          return;
         }
 
-        // if provider sends explicit heartbeat ack (adjust cmd_id if needed)
         if (json.cmd_id === 22998) {
-          // provider-echo for our heartbeat; just ignore or emit if needed
           this.emit("heartbeat_ack", json);
+          return;
         }
+
+        this.emit("raw", json);
       } catch (err) {
         console.error(`[${this.marketName}] Invalid JSON`, err);
       }
     });
-
-    // NOTE: do not rely on ws.pong() event for AllTick (custom protocol)
-    // remove pong handler entirely to avoid false timeouts
 
     this.client.on("close", (code, reason) => {
       const reasonStr = reason ? reason.toString() : "";
@@ -146,13 +149,11 @@ class AlltickWS extends EventEmitter {
     });
 
     this.client.on("error", (err) => {
-      // log error message only (avoid crashing)
       console.error(`[${this.marketName}] WS Error`, err && err.message ? err.message : err);
       this.cleanupAndReconnect();
     });
   }
 
-  // central cleanup + reconnect trigger
   cleanupAndReconnect(code = null, reason = "") {
     try {
       if (this.client) {
@@ -170,21 +171,17 @@ class AlltickWS extends EventEmitter {
     this.isConnecting = false;
     this.stopHeartbeat();
 
-    // if manualClose was requested, do not schedule reconnect
     if (this.manualClose) {
       console.log(`[${this.marketName}] manual close, not reconnecting`);
       return;
     }
 
-    // for normal close code 1000 we still attempt reconnect (network flaps),
-    // but do not spam — scheduleReconnect has guard against duplicates
     this.scheduleReconnect();
   }
 
   scheduleReconnect() {
     if (this.reconnectTimer) return;
 
-    // increase attempts and compute backoff (min 5s, max 60s)
     this.reconnectAttempts += 1;
     const delay = Math.min(5000 * this.reconnectAttempts, 60000);
 
@@ -192,13 +189,11 @@ class AlltickWS extends EventEmitter {
 
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
-      // guard: don't attempt if already connected
       if (this.connected || this.isConnecting) return;
       this.connect();
     }, delay);
   }
 
-  // Provider expects JSON heartbeat (not ws.ping). Use provider cmd_id for heartbeat.
   startHeartbeat() {
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
 
@@ -206,7 +201,7 @@ class AlltickWS extends EventEmitter {
       if (!this.connected || !this.client) return;
 
       const payload = {
-        cmd_id: 22998, // provider-specific heartbeat id — adjust if provider docs differ
+        cmd_id: 22998,
         seq_id: this.nextSeqId(),
         trace: buildTrace(),
       };
@@ -214,7 +209,6 @@ class AlltickWS extends EventEmitter {
       try {
         this.client.send(JSON.stringify(payload));
       } catch (err) {
-        // if send fails, attempt termination and reconnect (will be handled by close/error)
         console.error(`[${this.marketName}] Heartbeat send failed`, err && err.message ? err.message : err);
         try {
           this.client.terminate();
@@ -230,7 +224,6 @@ class AlltickWS extends EventEmitter {
     }
   }
 
-  // allow graceful manual close (useful for shutdown)
   closeManual() {
     this.manualClose = true;
     try {
@@ -315,7 +308,8 @@ export function registerClient(client) {
   client.routes = new Set(); // "market" and/or "account"
   wsClients.set(id, client);
   clientSubscriptions.set(id, new Set());
-  console.log("[WS CLIENT] Connected:", id);
+  ensureClientSubs(id);
+  DBG("Connected client", id);
   return id;
 }
 
@@ -323,19 +317,17 @@ export function registerClient(client) {
 export function removeClient(id) {
   const ws = wsClients.get(id);
   if (!ws) return;
-  // remove from accountIdMap if identified
   if (ws.accountId) {
     const set = accountIdMap.get(ws.accountId);
     if (set) {
       set.delete(id);
+      DBG("removed client from account map", ws.accountId, "remaining:", set.size);
       if (set.size === 0) accountIdMap.delete(ws.accountId);
     }
   }
-
-  // cleanup subscriptions map
   clientSubscriptions.delete(id);
   wsClients.delete(id);
-  console.log("[WS CLIENT] Disconnected:", id);
+  DBG("Disconnected client", id);
 }
 
 // ========================
@@ -354,6 +346,8 @@ function broadcastData(market, data) {
 
   const key = makeKey(market, symbol);
   const msg = JSON.stringify({ type: "orderbook", market, data });
+
+  DBG("broadcast orderbook ->", market, symbol, "clients:", Array.from(wsClients.keys()).length);
 
   for (const [id, ws] of wsClients.entries()) {
     if (!ws || ws.readyState !== WebSocket.OPEN) continue;
@@ -380,6 +374,7 @@ function feedEnginePrice(data) {
     data?.instrument_code;
 
   const normalized = normalizeSymbol(raw);
+  // do not strip stable suffixes here; keep same format engine expects (e.g. BTCUSDT)
   const symbol = normalized.startsWith("FX")
     ? normalized.replace(/^FX/, "")
     : normalized;
@@ -390,7 +385,13 @@ function feedEnginePrice(data) {
   const bid = Number(bestBid);
   const ask = Number(bestAsk);
 
-  tradeEngine.onTick(symbol, bid, ask);
+  DBG("onTick feed ->", symbol, "bid", bid, "ask", ask);
+
+  try {
+    tradeEngine.onTick(symbol, bid, ask);
+  } catch (err) {
+    console.error("[ENGINE] onTick error", err);
+  }
 }
 
 // ========================
@@ -413,24 +414,30 @@ wsStock.on("data", (d) => {
 function publishEngineEvent(eventType, payload) {
   const wrapper = JSON.stringify({ eventType, payload, ts: Date.now() });
   redisPub.publish(REDIS_CHANNEL, wrapper).catch((err) => {
-    console.error("[REDIS] publish error", err);
+    console.error("[ALLTICK-MGR][REDIS] publish error", err);
   });
 }
 
-// when local engine emits, publish to redis
-engineEvents.on("LIVE_ACCOUNT", (payload) => {
-  try {
-    publishEngineEvent("LIVE_ACCOUNT", payload);
-  } catch (err) {
-    console.error("[ENGINE] publish LIVE_ACCOUNT error", err);
-  }
-});
-engineEvents.on("LIVE_POSITION", (payload) => {
-  try {
-    publishEngineEvent("LIVE_POSITION", payload);
-  } catch (err) {
-    console.error("[ENGINE] publish LIVE_POSITION error", err);
-  }
+// publish ALL relevant engineEvents so other workers get them
+const forwardableEvents = [
+  "LIVE_ACCOUNT",
+  "LIVE_POSITION",
+  "LIVE_PENDING",
+  "LIVE_PENDING_EXECUTE",
+  "LIVE_PENDING_CANCEL",
+  "LIVE_PENDING_EXECUTE_FAILED",
+  "LIVE_PENDING_MODIFY",
+];
+
+forwardableEvents.forEach((ev) => {
+  engineEvents.on(ev, (payload) => {
+    try {
+      DBG("engineEvents", ev, "->", payload?.accountId ?? payload?.orderId ?? "?");
+      publishEngineEvent(ev, payload);
+    } catch (err) {
+      console.error(`[ENGINE] publish ${ev} error`, err);
+    }
+  });
 });
 
 // ========================
@@ -442,44 +449,99 @@ redisSub.on("message", (channel, message) => {
   try {
     obj = JSON.parse(message);
   } catch (err) {
-    console.error("[REDIS] invalid message", err);
+    console.error("[ALLTICK-MGR][REDIS] invalid message", err);
     return;
   }
 
   const { eventType, payload } = obj;
   if (!eventType || !payload) return;
 
+  DBG("redisSub message ->", eventType, payload?.accountId ?? payload?.orderId ?? null);
+
+  // account update
   if (eventType === "LIVE_ACCOUNT") {
     const s = accountIdMap.get(String(payload.accountId));
     if (!s || s.size === 0) return;
     const msgStr = JSON.stringify({ type: "live_account", data: payload });
+    let sent = 0;
     for (const clientId of s) {
       const ws = wsClients.get(clientId);
       if (!ws || ws.readyState !== WebSocket.OPEN) continue;
       if (!ws.routes || !ws.routes.has("account")) continue;
       try {
         ws.send(msgStr);
+        sent++;
       } catch (err) {
         console.error("[WS SEND ERROR] live_account ->", err);
       }
     }
+    DBG(`forwarded live_account to ${sent}/${s.size} clients for account ${payload.accountId}`);
     return;
   }
 
+  // position update
   if (eventType === "LIVE_POSITION") {
     const s = accountIdMap.get(String(payload.accountId));
     if (!s || s.size === 0) return;
     const msgStr = JSON.stringify({ type: "live_position", data: payload });
+    let sent = 0;
     for (const clientId of s) {
       const ws = wsClients.get(clientId);
       if (!ws || ws.readyState !== WebSocket.OPEN) continue;
       if (!ws.routes || !ws.routes.has("account")) continue;
       try {
         ws.send(msgStr);
+        sent++;
       } catch (err) {
         console.error("[WS SEND ERROR] live_position ->", err);
       }
     }
+    DBG(`forwarded live_position to ${sent}/${s.size} clients for account ${payload.accountId}`);
+    return;
+  }
+
+  // pending events: new/modify snapshot, execute, cancel, execute_failed
+  if (
+    [
+      "LIVE_PENDING",
+      "LIVE_PENDING_EXECUTE",
+      "LIVE_PENDING_CANCEL",
+      "LIVE_PENDING_EXECUTE_FAILED",
+      "LIVE_PENDING_MODIFY",
+    ].includes(eventType)
+  ) {
+    const accountId = String(payload.accountId);
+    const clients = accountIdMap.get(accountId);
+    if (!clients || clients.size === 0) {
+      DBG("no subscribers for pending event account", accountId);
+      return;
+    }
+
+    // map engine event -> client message type
+    const typeMap = {
+      LIVE_PENDING: "live_pending",
+      LIVE_PENDING_EXECUTE: "live_pending_execute",
+      LIVE_PENDING_CANCEL: "live_pending_cancel",
+      LIVE_PENDING_EXECUTE_FAILED: "live_pending_execute_failed",
+      LIVE_PENDING_MODIFY: "live_pending_modify",
+    };
+
+    const type = typeMap[eventType] || "live_pending";
+
+    const msgStr = JSON.stringify({ type, data: payload });
+    let sent = 0;
+    for (const clientId of clients) {
+      const ws = wsClients.get(clientId);
+      if (!ws || ws.readyState !== WebSocket.OPEN) continue;
+      if (!ws.routes || !ws.routes.has("account")) continue;
+      try {
+        ws.send(msgStr);
+        sent++;
+      } catch (err) {
+        console.error("[WS SEND ERROR]", type, "->", err);
+      }
+    }
+    DBG(`forwarded ${type} to ${sent}/${clients.size} clients for account ${accountId}`);
     return;
   }
 });
@@ -490,10 +552,13 @@ redisSub.on("message", (channel, message) => {
 export async function handleClientMessage(clientWs, msg) {
   try {
     const data = JSON.parse(msg);
+    ensureClientSubs(clientWs.clientId);
     const subs = clientSubscriptions.get(clientWs.clientId);
     if (!subs) return;
 
-    // JOIN route (not strictly required if path-auto-joined)
+    DBG("client message", clientWs.clientId, data.type || "<unknown>");
+
+    // JOIN route (market/account)
     if (data.type === "join" && data.route) {
       const route = String(data.route).toLowerCase();
       if (route === "market" || route === "account") {
@@ -542,8 +607,10 @@ export async function handleClientMessage(clientWs, msg) {
           JSON.stringify({
             status: "subscribed",
             symbol,
+            dayOpen: hl?.data?.open ?? null,
             dayHigh: hl?.data?.high ?? null,
             dayLow: hl?.data?.low ?? null,
+            dayClose: hl?.data?.close ?? null,
           })
         );
       } catch (err) {
@@ -567,13 +634,11 @@ export async function handleClientMessage(clientWs, msg) {
       return;
     }
 
-    // ACCOUNT identify
+    // ACCOUNT identify -> register + snapshot pending orders + positions + account
     if (data.type === "identify" && data.accountId) {
+      // if client hasn't joined account route, add it automatically (keeps UX simple)
       if (!clientWs.routes.has("account")) {
-        try {
-          clientWs.send(JSON.stringify({ status: "error", error: "join account route first" }));
-        } catch {}
-        return;
+        clientWs.routes.add("account");
       }
 
       const accountId = String(data.accountId);
@@ -583,14 +648,90 @@ export async function handleClientMessage(clientWs, msg) {
       ensureAccountSet(accountId);
       accountIdMap.get(accountId).add(clientWs.clientId);
 
+      DBG("client identified", clientWs.clientId, "accountId", accountId, "subscribers:", accountIdMap.get(accountId).size);
+
+      // send ack
       try {
         clientWs.send(JSON.stringify({ status: "identified", accountId: clientWs.accountId }));
       } catch (err) {
         console.error("[WS SEND ERROR] identify ack ->", err);
       }
+
+      // === 1) send pendingOrders snapshot (one-time) ===
+      try {
+        const account = tradeEngine.accounts.get(accountId);
+        if (account?.pendingOrders && account.pendingOrders.size > 0) {
+          DBG("sending pendingOrders snapshot", account.pendingOrders.size, "to", clientWs.clientId);
+          for (const order of account.pendingOrders.values()) {
+            try {
+              clientWs.send(JSON.stringify({ type: "live_pending", data: order }));
+            } catch (err) {
+              console.error("[WS SEND ERROR] live_pending snapshot ->", err);
+            }
+          }
+        } else {
+          DBG("no pendingOrders to snapshot for", accountId);
+        }
+      } catch (err) {
+        console.error("[ALLTICK-MGR] error sending pendingOrders snapshot", err);
+      }
+
+      // === 2) send positions snapshot (one-time) ===
+      try {
+        const account = tradeEngine.accounts.get(accountId);
+        if (account?.positions && account.positions.size > 0) {
+          DBG("sending positions snapshot", account.positions.size, "to", clientWs.clientId);
+          for (const pos of account.positions.values()) {
+            try {
+              const payload = {
+                accountId: accountId,
+                positionId: pos.positionId,
+                volume: pos.volume,
+                openTime: pos.openTime || Date.now(),
+                symbol: pos.symbol,
+                side: pos.side,
+                openPrice: pos.openPrice,
+                currentPrice: pos.openPrice,
+                floatingPnL: Number((pos.floatingPnL || 0).toFixed(2)),
+                stopLoss: pos.stopLoss ?? null,
+                takeProfit: pos.takeProfit ?? null,
+              };
+              clientWs.send(JSON.stringify({ type: "live_position", data: payload }));
+            } catch (err) {
+              console.error("[WS SEND ERROR] live_position snapshot ->", err);
+            }
+          }
+        } else {
+          DBG("no positions to snapshot for", accountId);
+        }
+      } catch (err) {
+        console.error("[ALLTICK-MGR] error sending positions snapshot", err);
+      }
+
+      // === 3) send account snapshot (one-time) ===
+      try {
+        const account = tradeEngine.accounts.get(accountId);
+        if (account) {
+          const accPayload = {
+            accountId,
+            balance: Number(account.balance?.toFixed ? account.balance.toFixed(2) : account.balance),
+            equity: Number(account.equity?.toFixed ? account.equity.toFixed(2) : account.equity),
+            usedMargin: Number(account.usedMargin?.toFixed ? account.usedMargin.toFixed(2) : account.usedMargin),
+            freeMargin: Number(account.freeMargin?.toFixed ? account.freeMargin.toFixed(2) : account.freeMargin),
+          };
+          clientWs.send(JSON.stringify({ type: "live_account", data: accPayload }));
+          DBG("sent account snapshot to", clientWs.clientId, accPayload);
+        } else {
+          DBG("no account object found in tradeEngine for", accountId);
+        }
+      } catch (err) {
+        console.error("[ALLTICK-MGR] error sending account snapshot", err);
+      }
+
+      // After snapshots, future pending/position/account events will be forwarded via redisSub handler
+
       return;
     }
-
   } catch (err) {
     console.error("[WS CLIENT] Invalid message", err);
     try {
@@ -598,3 +739,7 @@ export async function handleClientMessage(clientWs, msg) {
     } catch {}
   }
 }
+
+// ========================
+// end of file
+// ========================

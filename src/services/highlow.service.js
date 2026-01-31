@@ -7,8 +7,8 @@ dotenv.config();
 const ALLTICK_TOKEN = String(process.env.ALLTICK_API_KEY || "").trim();
 
 // REST base URLs (same as AllTick docs)
-const REST_CRYPTO_BASE = String(process.env.ALLTICK_CRYPTO_REST_URL || "").trim(); // https://quote.alltick.co/quote-b-api
-const REST_STOCK_BASE = String(process.env.ALLTICK_STOCK_REST_URL || "").trim(); // https://quote.alltick.co/quote-stock-b-api
+const REST_CRYPTO_BASE = String(process.env.ALLTICK_CRYPTO_REST_URL || "").trim();
+const REST_STOCK_BASE = String(process.env.ALLTICK_STOCK_REST_URL || "").trim();
 
 // ✅ Redis default export
 import redis, { isRedisReady } from "../config/redis.js";
@@ -25,9 +25,11 @@ const getDayStringIST = () => {
   const now = new Date();
   const istMs = now.getTime() + 5.5 * 60 * 60 * 1000;
   const istDate = new Date(istMs);
+
   const yyyy = istDate.getUTCFullYear();
   const mm = String(istDate.getUTCMonth() + 1).padStart(2, "0");
   const dd = String(istDate.getUTCDate()).padStart(2, "0");
+
   return `${yyyy}-${mm}-${dd}`;
 };
 
@@ -55,10 +57,11 @@ const getBatchKlineUrl = (market) => {
 const buildTrace = () => {
   const rand = crypto.randomUUID();
   const ts = Date.now();
+
   return `${rand}-${ts}`;
 };
 
-// In-flight locks: market:symbol -> Promise
+// In-flight locks
 const inflight = new Map();
 
 const fetchDayHighLowFromAllTick = async (market, symbol) => {
@@ -66,6 +69,7 @@ const fetchDayHighLowFromAllTick = async (market, symbol) => {
   const s = normalizeSymbol(symbol);
 
   const url = getBatchKlineUrl(m);
+
   if (!url) {
     return {
       error: {
@@ -75,7 +79,7 @@ const fetchDayHighLowFromAllTick = async (market, symbol) => {
     };
   }
 
-  // Daily Kline = 8 (gives day high/low)
+  // Daily Kline = 8
   const body = {
     trace: buildTrace(),
     data: {
@@ -92,21 +96,27 @@ const fetchDayHighLowFromAllTick = async (market, symbol) => {
   };
 
   let resp;
+
   try {
     resp = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-  } catch (e) {
-    return { error: { status: 500, message: "Failed to call AllTick API" } };
+  } catch {
+    return {
+      error: { status: 500, message: "Failed to call AllTick API" },
+    };
   }
 
   let json;
+
   try {
     json = await resp.json();
-  } catch (e) {
-    return { error: { status: 500, message: "Invalid AllTick response" } };
+  } catch {
+    return {
+      error: { status: 500, message: "Invalid AllTick response" },
+    };
   }
 
   if (!json || json.ret !== 200) {
@@ -120,22 +130,41 @@ const fetchDayHighLowFromAllTick = async (market, symbol) => {
   }
 
   const klineList = json?.data?.kline_list;
+
   if (!Array.isArray(klineList) || klineList.length === 0) {
-    return { error: { status: 404, message: "No kline data returned" } };
+    return {
+      error: { status: 404, message: "No kline data returned" },
+    };
   }
 
   const klineData = klineList[0]?.kline_data;
+
   if (!Array.isArray(klineData) || klineData.length === 0) {
-    return { error: { status: 404, message: "No kline_data returned" } };
+    return {
+      error: { status: 404, message: "No kline_data returned" },
+    };
   }
 
   const item = klineData[0];
 
+  // ✅ OHLC
+  const open = safeNumber(item?.open_price);
   const high = safeNumber(item?.high_price);
   const low = safeNumber(item?.low_price);
+  const close = safeNumber(item?.close_price);
 
-  if (high === null || low === null) {
-    return { error: { status: 500, message: "Invalid high/low values from AllTick" } };
+  if (
+    open === null ||
+    high === null ||
+    low === null ||
+    close === null
+  ) {
+    return {
+      error: {
+        status: 500,
+        message: "Invalid OHLC values from AllTick",
+      },
+    };
   }
 
   return {
@@ -143,8 +172,10 @@ const fetchDayHighLowFromAllTick = async (market, symbol) => {
       market: m,
       symbol: s,
       day: getDayStringIST(),
+      open,
       high,
       low,
+      close,
       source: "alltick_daily_kline",
       updatedAt: Date.now(),
     },
@@ -157,28 +188,39 @@ export const HighLowService = {
     const s = normalizeSymbol(symbol);
 
     if (!m || !s) {
-      return { error: { status: 400, message: "market and symbol required" } };
+      return {
+        error: { status: 400, message: "market and symbol required" },
+      };
     }
 
     const redisKey = makeKey(m, s);
 
-    // 1) Try Redis cache (only if ready)
+    // 1) Redis Cache
     if (isRedisReady()) {
       try {
         const cachedRaw = await redis.get(redisKey);
+
         if (cachedRaw) {
           const cached = JSON.parse(cachedRaw);
           const today = getDayStringIST();
 
+          const o = safeNumber(cached?.open);
           const h = safeNumber(cached?.high);
           const l = safeNumber(cached?.low);
+          const c = safeNumber(cached?.close);
 
-          if (cached?.day === today && h !== null && l !== null) {
+          if (
+            cached?.day === today &&
+            o !== null &&
+            h !== null &&
+            l !== null &&
+            c !== null
+          ) {
             return { data: cached };
           }
         }
-      } catch (e) {
-        // ignore cache errors, continue to fetch
+      } catch {
+        // ignore cache error
       }
     }
 
@@ -186,6 +228,7 @@ export const HighLowService = {
     const inflightKey = `${m}:${s}`;
 
     const existing = inflight.get(inflightKey);
+
     if (existing) {
       return existing;
     }
@@ -193,11 +236,16 @@ export const HighLowService = {
     const p = (async () => {
       const res = await fetchDayHighLowFromAllTick(m, s);
 
-      // cache for ~26 hours (only if redis ready)
+      // cache 26 hours
       if (res?.data && isRedisReady()) {
         try {
-          await redis.set(redisKey, JSON.stringify(res.data), "EX", 26 * 60 * 60);
-        } catch (e) {}
+          await redis.set(
+            redisKey,
+            JSON.stringify(res.data),
+            "EX",
+            26 * 60 * 60
+          );
+        } catch {}
       }
 
       return res;
@@ -217,26 +265,41 @@ export const HighLowService = {
     const s = normalizeSymbol(symbol);
 
     if (!m || !s) {
-      return { error: { status: 400, message: "market and symbol required" } };
+      return {
+        error: { status: 400, message: "market and symbol required" },
+      };
     }
 
     if (!isRedisReady()) {
-      return { error: { status: 503, message: "Redis not ready" } };
+      return {
+        error: { status: 503, message: "Redis not ready" },
+      };
     }
 
     const redisKey = makeKey(m, s);
 
     try {
       await redis.del(redisKey);
-      return { data: { market: m, symbol: s, reset: true } };
-    } catch (e) {
-      return { error: { status: 500, message: "Failed to reset high/low" } };
+
+      return {
+        data: {
+          market: m,
+          symbol: s,
+          reset: true,
+        },
+      };
+    } catch {
+      return {
+        error: { status: 500, message: "Failed to reset high/low" },
+      };
     }
   },
 
   async resetAllDayHighLow() {
     if (!isRedisReady()) {
-      return { error: { status: 503, message: "Redis not ready" } };
+      return {
+        error: { status: 503, message: "Redis not ready" },
+      };
     }
 
     let cursor = "0";
@@ -244,9 +307,18 @@ export const HighLowService = {
 
     try {
       do {
-        const reply = await redis.scan(cursor, "MATCH", "dayhl:*", "COUNT", "200");
+        const reply = await redis.scan(
+          cursor,
+          "MATCH",
+          "dayhl:*",
+          "COUNT",
+          "200"
+        );
 
-        const nextCursor = Array.isArray(reply) ? String(reply[0] || "0") : "0";
+        const nextCursor = Array.isArray(reply)
+          ? String(reply[0] || "0")
+          : "0";
+
         const keys = Array.isArray(reply) ? reply[1] : [];
 
         cursor = nextCursor;
@@ -258,8 +330,10 @@ export const HighLowService = {
       } while (cursor !== "0");
 
       return { data: { deleted } };
-    } catch (e) {
-      return { error: { status: 500, message: "Failed to reset all high/low" } };
+    } catch {
+      return {
+        error: { status: 500, message: "Failed to reset all high/low" },
+      };
     }
   },
 };
