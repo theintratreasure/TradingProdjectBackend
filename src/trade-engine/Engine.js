@@ -28,7 +28,7 @@ export class Engine {
         leverage,
         userId,
         lastIp,
-      })
+      }),
     );
 
     if (DEBUG_LIVE) {
@@ -99,9 +99,7 @@ export class Engine {
       takeProfit: order.takeProfit,
 
       expireType: order.expireType || "GTC",
-      expireAt: order.expireAt
-        ? new Date(order.expireAt).getTime()
-        : null,
+      expireAt: order.expireAt ? new Date(order.expireAt).getTime() : null,
 
       createdAt: order.createdAt
         ? new Date(order.createdAt).getTime()
@@ -208,64 +206,10 @@ export class Engine {
   }
 
   /* =========================
-     PENDING ORDERS
-  ========================== */
-
-  placePendingOrder(data) {
-    const account = this.accounts.get(data.accountId);
-
-    if (!account) throw new Error("Invalid trading account");
-
-    if (!account.pendingOrders) {
-      account.pendingOrders = new Map();
-    }
-
-    const now = Date.now();
-
-    let expireAt = null;
-
-    if (data.expireType === "TODAY") {
-      const end = new Date();
-      end.setHours(23, 59, 59, 999);
-      expireAt = end.getTime();
-    }
-
-    if (data.expireType === "TIME" && data.expireAt) {
-      expireAt = new Date(data.expireAt).getTime();
-    }
-
-    const order = {
-      orderId: uuidv4(),
-      userId: account.userId,
-
-      accountId: data.accountId,
-      symbol: data.symbol,
-      side: data.side,
-      orderType: data.orderType,
-      price: data.price,
-      volume: data.volume,
-
-      stopLoss: data.stopLoss,
-      takeProfit: data.takeProfit,
-
-      expireType: data.expireType || "GTC",
-      expireAt,
-
-      createdAt: now,
-    };
-
-    account.pendingOrders.set(order.orderId, order);
-
-    ledgerQueue.enqueue("ORDER_PENDING_CREATE", order);
-
-    return order;
-  }
-
-  /* =========================
      PRICE TICK
   ========================== */
 
-  onTick(symbol, bid, ask) {
+  async onTick(symbol, bid, ask) {
     const sym = this.symbols.get(symbol);
     if (!sym) return;
 
@@ -274,17 +218,15 @@ export class Engine {
     sym.lastTickAt = Date.now();
 
     for (const account of this.accounts.values()) {
+      /* =====================
+         PENDING ORDERS
+      ====================== */
 
-      /* === PENDING === */
       if (account.pendingOrders?.size) {
-
         const now = Date.now();
 
         for (const order of account.pendingOrders.values()) {
-
-          /* ===== EXPIRE CHECK ===== */
           if (order.expireAt && now >= order.expireAt) {
-
             account.pendingOrders.delete(order.orderId);
 
             ledgerQueue.enqueue("ORDER_PENDING_CANCEL", {
@@ -320,9 +262,11 @@ export class Engine {
         }
       }
 
-      /* === POSITIONS === */
-      for (const pos of account.positions.values()) {
+      /* =====================
+         POSITIONS
+      ====================== */
 
+      for (const pos of account.positions.values()) {
         if (pos.symbol !== symbol) continue;
 
         pos.updatePnL(bid, ask);
@@ -332,6 +276,8 @@ export class Engine {
         engineEvents.emit("LIVE_POSITION", {
           accountId: account.accountId,
           positionId: pos.positionId,
+          volume: pos.volume, 
+          openTime: pos.openTime,
           symbol: pos.symbol,
           side: pos.side,
           openPrice: pos.openPrice,
@@ -341,23 +287,29 @@ export class Engine {
           takeProfit: pos.takeProfit,
         });
 
+        /* === STOP LOSS === */
         if (
           pos.stopLoss !== null &&
           ((pos.side === "BUY" && currentPrice <= pos.stopLoss) ||
-           (pos.side === "SELL" && currentPrice >= pos.stopLoss))
+            (pos.side === "SELL" && currentPrice >= pos.stopLoss))
         ) {
           this.closePositionInternal(account, pos, "STOP_LOSS", sym);
           continue;
         }
 
+        /* === TAKE PROFIT === */
         if (
           pos.takeProfit !== null &&
           ((pos.side === "BUY" && currentPrice >= pos.takeProfit) ||
-           (pos.side === "SELL" && currentPrice <= pos.takeProfit))
+            (pos.side === "SELL" && currentPrice <= pos.takeProfit))
         ) {
           this.closePositionInternal(account, pos, "TAKE_PROFIT", sym);
         }
       }
+
+      /* =====================
+         ACCOUNT UPDATE
+      ====================== */
 
       this.recalcUsedMargin(account);
 
@@ -369,6 +321,14 @@ export class Engine {
         freeMargin: Number(account.freeMargin.toFixed(2)),
       });
 
+      /* =====================
+         RISK MANAGEMENT
+      ====================== */
+
+      // 70% Warning
+      await RiskManager.checkWarning(account);
+
+      // 90% Stopout
       if (RiskManager.shouldStopOut(account)) {
         this.forceCloseWorst(account);
       }
