@@ -37,7 +37,10 @@ redisSub.subscribe(REDIS_CHANNEL, (err) => {
 const nowTs = () => Date.now();
 const buildTrace = () => `${uuidv4()}-${nowTs()}`;
 
-const normalizeMarket = (v) => String(v || "").trim().toLowerCase();
+const normalizeMarket = (v) =>
+  String(v || "")
+    .trim()
+    .toLowerCase();
 const normalizeSymbol = (v) =>
   String(v || "")
     .replace(/[^A-Za-z]/g, "")
@@ -47,7 +50,7 @@ const makeKey = (market, symbol) =>
 
 const DBG = (...args) => {
   try {
-    console.debug.apply(console, ["[ALLTICK-MGR]", ...args]);
+    // console.debug.apply(console, ["[ALLTICK-MGR]", ...args]);
   } catch {}
 };
 
@@ -149,7 +152,10 @@ class AlltickWS extends EventEmitter {
     });
 
     this.client.on("error", (err) => {
-      console.error(`[${this.marketName}] WS Error`, err && err.message ? err.message : err);
+      console.error(
+        `[${this.marketName}] WS Error`,
+        err && err.message ? err.message : err,
+      );
       this.cleanupAndReconnect();
     });
   }
@@ -209,7 +215,10 @@ class AlltickWS extends EventEmitter {
       try {
         this.client.send(JSON.stringify(payload));
       } catch (err) {
-        console.error(`[${this.marketName}] Heartbeat send failed`, err && err.message ? err.message : err);
+        console.error(
+          `[${this.marketName}] Heartbeat send failed`,
+          err && err.message ? err.message : err,
+        );
         try {
           this.client.terminate();
         } catch {}
@@ -266,7 +275,10 @@ class AlltickWS extends EventEmitter {
     try {
       this.client.send(JSON.stringify(payload));
     } catch (err) {
-      console.error(`[${this.marketName}] pushSubscription send failed`, err && err.message ? err.message : err);
+      console.error(
+        `[${this.marketName}] pushSubscription send failed`,
+        err && err.message ? err.message : err,
+      );
     }
   }
 
@@ -295,7 +307,8 @@ const clientSubscriptions = new Map(); // clientId -> Set(keys)
 const accountIdMap = new Map(); // accountId -> Set(clientId)
 
 function ensureClientSubs(clientId) {
-  if (!clientSubscriptions.has(clientId)) clientSubscriptions.set(clientId, new Set());
+  if (!clientSubscriptions.has(clientId))
+    clientSubscriptions.set(clientId, new Set());
 }
 function ensureAccountSet(accountId) {
   if (!accountIdMap.has(accountId)) accountIdMap.set(accountId, new Set());
@@ -321,7 +334,12 @@ export function removeClient(id) {
     const set = accountIdMap.get(ws.accountId);
     if (set) {
       set.delete(id);
-      DBG("removed client from account map", ws.accountId, "remaining:", set.size);
+      DBG(
+        "removed client from account map",
+        ws.accountId,
+        "remaining:",
+        set.size,
+      );
       if (set.size === 0) accountIdMap.delete(ws.accountId);
     }
   }
@@ -347,7 +365,13 @@ function broadcastData(market, data) {
   const key = makeKey(market, symbol);
   const msg = JSON.stringify({ type: "orderbook", market, data });
 
-  DBG("broadcast orderbook ->", market, symbol, "clients:", Array.from(wsClients.keys()).length);
+  DBG(
+    "broadcast orderbook ->",
+    market,
+    symbol,
+    "clients:",
+    Array.from(wsClients.keys()).length,
+  );
 
   for (const [id, ws] of wsClients.entries()) {
     if (!ws || ws.readyState !== WebSocket.OPEN) continue;
@@ -414,7 +438,7 @@ wsStock.on("data", (d) => {
 function publishEngineEvent(eventType, payload) {
   const wrapper = JSON.stringify({ eventType, payload, ts: Date.now() });
   redisPub.publish(REDIS_CHANNEL, wrapper).catch((err) => {
-    console.error("[ALLTICK-MGR][REDIS] publish error", err);
+    // console.error("[ALLTICK-MGR][REDIS] publish error", err);
   });
 }
 
@@ -432,7 +456,12 @@ const forwardableEvents = [
 forwardableEvents.forEach((ev) => {
   engineEvents.on(ev, (payload) => {
     try {
-      DBG("engineEvents", ev, "->", payload?.accountId ?? payload?.orderId ?? "?");
+      DBG(
+        "engineEvents",
+        ev,
+        "->",
+        payload?.accountId ?? payload?.orderId ?? "?",
+      );
       publishEngineEvent(ev, payload);
     } catch (err) {
       console.error(`[ENGINE] publish ${ev} error`, err);
@@ -456,7 +485,11 @@ redisSub.on("message", (channel, message) => {
   const { eventType, payload } = obj;
   if (!eventType || !payload) return;
 
-  DBG("redisSub message ->", eventType, payload?.accountId ?? payload?.orderId ?? null);
+  DBG(
+    "redisSub message ->",
+    eventType,
+    payload?.accountId ?? payload?.orderId ?? null,
+  );
 
   // account update
   if (eventType === "LIVE_ACCOUNT") {
@@ -475,7 +508,9 @@ redisSub.on("message", (channel, message) => {
         console.error("[WS SEND ERROR] live_account ->", err);
       }
     }
-    DBG(`forwarded live_account to ${sent}/${s.size} clients for account ${payload.accountId}`);
+    DBG(
+      `forwarded live_account to ${sent}/${s.size} clients for account ${payload.accountId}`,
+    );
     return;
   }
 
@@ -496,7 +531,9 @@ redisSub.on("message", (channel, message) => {
         console.error("[WS SEND ERROR] live_position ->", err);
       }
     }
-    DBG(`forwarded live_position to ${sent}/${s.size} clients for account ${payload.accountId}`);
+    DBG(
+      `forwarded live_position to ${sent}/${s.size} clients for account ${payload.accountId}`,
+    );
     return;
   }
 
@@ -541,7 +578,9 @@ redisSub.on("message", (channel, message) => {
         console.error("[WS SEND ERROR]", type, "->", err);
       }
     }
-    DBG(`forwarded ${type} to ${sent}/${clients.size} clients for account ${accountId}`);
+    DBG(
+      `forwarded ${type} to ${sent}/${clients.size} clients for account ${accountId}`,
+    );
     return;
   }
 });
@@ -586,7 +625,12 @@ export async function handleClientMessage(clientWs, msg) {
     if (data.type === "subscribe") {
       if (!clientWs.routes.has("market")) {
         try {
-          clientWs.send(JSON.stringify({ status: "error", error: "join market route first" }));
+          clientWs.send(
+            JSON.stringify({
+              status: "error",
+              error: "join market route first",
+            }),
+          );
         } catch {}
         return;
       }
@@ -600,7 +644,9 @@ export async function handleClientMessage(clientWs, msg) {
       if (market === "crypto") wsCrypto.subscribe(symbol);
       if (market === "stock") wsStock.subscribe(symbol);
 
-      const hl = await HighLowService.getDayHighLow(market, symbol).catch(() => null);
+      const hl = await HighLowService.getDayHighLow(market, symbol).catch(
+        () => null,
+      );
 
       try {
         clientWs.send(
@@ -611,7 +657,7 @@ export async function handleClientMessage(clientWs, msg) {
             dayHigh: hl?.data?.high ?? null,
             dayLow: hl?.data?.low ?? null,
             dayClose: hl?.data?.close ?? null,
-          })
+          }),
         );
       } catch (err) {
         console.error("[WS SEND ERROR] subscribe ack ->", err);
@@ -648,11 +694,23 @@ export async function handleClientMessage(clientWs, msg) {
       ensureAccountSet(accountId);
       accountIdMap.get(accountId).add(clientWs.clientId);
 
-      DBG("client identified", clientWs.clientId, "accountId", accountId, "subscribers:", accountIdMap.get(accountId).size);
+      DBG(
+        "client identified",
+        clientWs.clientId,
+        "accountId",
+        accountId,
+        "subscribers:",
+        accountIdMap.get(accountId).size,
+      );
 
       // send ack
       try {
-        clientWs.send(JSON.stringify({ status: "identified", accountId: clientWs.accountId }));
+        clientWs.send(
+          JSON.stringify({
+            status: "identified",
+            accountId: clientWs.accountId,
+          }),
+        );
       } catch (err) {
         console.error("[WS SEND ERROR] identify ack ->", err);
       }
@@ -661,10 +719,17 @@ export async function handleClientMessage(clientWs, msg) {
       try {
         const account = tradeEngine.accounts.get(accountId);
         if (account?.pendingOrders && account.pendingOrders.size > 0) {
-          DBG("sending pendingOrders snapshot", account.pendingOrders.size, "to", clientWs.clientId);
+          DBG(
+            "sending pendingOrders snapshot",
+            account.pendingOrders.size,
+            "to",
+            clientWs.clientId,
+          );
           for (const order of account.pendingOrders.values()) {
             try {
-              clientWs.send(JSON.stringify({ type: "live_pending", data: order }));
+              clientWs.send(
+                JSON.stringify({ type: "live_pending", data: order }),
+              );
             } catch (err) {
               console.error("[WS SEND ERROR] live_pending snapshot ->", err);
             }
@@ -673,14 +738,22 @@ export async function handleClientMessage(clientWs, msg) {
           DBG("no pendingOrders to snapshot for", accountId);
         }
       } catch (err) {
-        console.error("[ALLTICK-MGR] error sending pendingOrders snapshot", err);
+        // console.error(
+        //   "[ALLTICK-MGR] error sending pendingOrders snapshot",
+        //   err,
+        // );
       }
 
       // === 2) send positions snapshot (one-time) ===
       try {
         const account = tradeEngine.accounts.get(accountId);
         if (account?.positions && account.positions.size > 0) {
-          DBG("sending positions snapshot", account.positions.size, "to", clientWs.clientId);
+          DBG(
+            "sending positions snapshot",
+            account.positions.size,
+            "to",
+            clientWs.clientId,
+          );
           for (const pos of account.positions.values()) {
             try {
               const payload = {
@@ -695,8 +768,12 @@ export async function handleClientMessage(clientWs, msg) {
                 floatingPnL: Number((pos.floatingPnL || 0).toFixed(2)),
                 stopLoss: pos.stopLoss ?? null,
                 takeProfit: pos.takeProfit ?? null,
+                commission: pos.commission || 0,
+                swapPerDay: pos.swapPerDay || 0,
               };
-              clientWs.send(JSON.stringify({ type: "live_position", data: payload }));
+              clientWs.send(
+                JSON.stringify({ type: "live_position", data: payload }),
+              );
             } catch (err) {
               console.error("[WS SEND ERROR] live_position snapshot ->", err);
             }
@@ -705,7 +782,7 @@ export async function handleClientMessage(clientWs, msg) {
           DBG("no positions to snapshot for", accountId);
         }
       } catch (err) {
-        console.error("[ALLTICK-MGR] error sending positions snapshot", err);
+        // console.error("[ALLTICK-MGR] error sending positions snapshot", err);
       }
 
       // === 3) send account snapshot (one-time) ===
@@ -714,12 +791,30 @@ export async function handleClientMessage(clientWs, msg) {
         if (account) {
           const accPayload = {
             accountId,
-            balance: Number(account.balance?.toFixed ? account.balance.toFixed(2) : account.balance),
-            equity: Number(account.equity?.toFixed ? account.equity.toFixed(2) : account.equity),
-            usedMargin: Number(account.usedMargin?.toFixed ? account.usedMargin.toFixed(2) : account.usedMargin),
-            freeMargin: Number(account.freeMargin?.toFixed ? account.freeMargin.toFixed(2) : account.freeMargin),
+            balance: Number(
+              account.balance?.toFixed
+                ? account.balance.toFixed(2)
+                : account.balance,
+            ),
+            equity: Number(
+              account.equity?.toFixed
+                ? account.equity.toFixed(2)
+                : account.equity,
+            ),
+            usedMargin: Number(
+              account.usedMargin?.toFixed
+                ? account.usedMargin.toFixed(2)
+                : account.usedMargin,
+            ),
+            freeMargin: Number(
+              account.freeMargin?.toFixed
+                ? account.freeMargin.toFixed(2)
+                : account.freeMargin,
+            ),
           };
-          clientWs.send(JSON.stringify({ type: "live_account", data: accPayload }));
+          clientWs.send(
+            JSON.stringify({ type: "live_account", data: accPayload }),
+          );
           DBG("sent account snapshot to", clientWs.clientId, accPayload);
         } else {
           DBG("no account object found in tradeEngine for", accountId);

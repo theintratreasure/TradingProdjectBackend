@@ -25,6 +25,8 @@ class LedgerQueue {
     console.log("[LEDGER] EVENT RECEIVED:", event);
 
     switch (event) {
+      /* ================= TRADE ================= */
+
       case "TRADE_OPEN":
         await this.tradeOpen(payload);
         break;
@@ -32,6 +34,8 @@ class LedgerQueue {
       case "TRADE_CLOSE":
         await this.tradeClose(payload);
         break;
+
+      /* ================= PENDING ================= */
 
       case "ORDER_PENDING_CREATE":
         await this.pendingCreate(payload);
@@ -43,6 +47,10 @@ class LedgerQueue {
 
       case "ORDER_PENDING_CANCEL":
         await this.pendingCancel(payload);
+        break;
+
+      case "ORDER_PENDING_EXECUTE_FAILED":
+        await this.pendingFailed(payload);
         break;
 
       default:
@@ -148,6 +156,7 @@ class LedgerQueue {
     }
 
     const account = await Account.findById(accountId);
+
     if (!account) {
       console.error("[LEDGER][TRADE_CLOSE] Account not found", accountId);
       return;
@@ -184,7 +193,7 @@ class LedgerQueue {
   }
 
   /* =========================
-     PENDING ORDER CREATE
+     PENDING CREATE
   ========================= */
 
   async pendingCreate(order) {
@@ -207,7 +216,7 @@ class LedgerQueue {
   }
 
   /* =========================
-     PENDING ORDER EXECUTE
+     PENDING EXECUTE
   ========================= */
 
   async pendingExecute(order) {
@@ -225,7 +234,7 @@ class LedgerQueue {
   }
 
   /* =========================
-     PENDING ORDER CANCEL
+     PENDING CANCEL
   ========================= */
 
   async pendingCancel({ orderId }) {
@@ -240,6 +249,25 @@ class LedgerQueue {
     );
 
     console.log("[LEDGER][PENDING_CANCEL][OK]", orderId);
+  }
+
+  /* =========================
+     PENDING FAILED (NEW)
+  ========================= */
+
+  async pendingFailed({ orderId, reason }) {
+    await PendingOrder.updateOne(
+      { orderId },
+      {
+        $set: {
+          status: "FAILED",
+          failReason: reason || "EXECUTION_FAILED",
+          failedAt: new Date(),
+        },
+      }
+    );
+
+    console.log("[LEDGER][PENDING_FAILED][OK]", orderId, reason);
   }
 }
 

@@ -81,12 +81,25 @@ export async function createAccount({
   // ================= ACCOUNT NUMBER =================
   const accountNumber = generateAccountNumber();
 
-  // ================= PASSWORD GENERATION =================
+  // ================= PASSWORD =================
   const tradePasswordPlain = generateStrongPassword(12);
   const watchPasswordPlain = generateStrongPassword(12);
 
   const tradePasswordHash = await hashPassword(tradePasswordPlain);
   const watchPasswordHash = await hashPassword(watchPasswordPlain);
+
+  // ================= PLAN SNAPSHOT =================
+  const spreadType = plan.spread_type || "FLOATING";
+  const spreadPips = typeof plan.spreadPips === "number" ? plan.spreadPips : 0;
+  const commissionPerLot =
+    typeof plan.commission_per_lot === "number"
+      ? plan.commission_per_lot
+      : 0;
+
+  const swapEnabled = !!plan.swap_enabled;
+
+  const swapCharge =
+    typeof plan.swap_charge === "number" ? plan.swap_charge : 0;
 
   // ================= CREATE ACCOUNT =================
   const account = await Account.create({
@@ -96,17 +109,22 @@ export async function createAccount({
     account_number: accountNumber,
     account_type,
 
-    // PLAN SNAPSHOT
+    // ===== PLAN SNAPSHOT =====
     plan_name: plan.name,
     leverage,
-    spread_type: plan.spread_type,
-    spread_pips: plan.spreadPips,
-    commission_per_lot: plan.commission_per_lot,
-    swap_enabled: plan.swap_enabled,
 
-    // FINANCIALS
+    spread_type: spreadType,
+    spread_pips: spreadPips,
+
+    commission_per_lot: commissionPerLot,
+
+    swap_enabled: swapEnabled,
+    swap_charge: swapCharge,
+
+    // ===== FINANCIALS =====
     balance,
     equity: balance,
+
     currency: plan.currency || "USD",
 
     status: "active",
@@ -140,17 +158,25 @@ export async function createAccount({
     }).catch(() => {});
   }
 
-  // ================= RETURN (ONE-TIME PASSWORD VIEW) =================
+  // ================= RETURN =================
   return {
     id: account._id,
     account_number: account.account_number,
     account_type: account.account_type,
     plan_name: account.plan_name,
+
     balance: account.balance,
     currency: account.currency,
     leverage: account.leverage,
 
-    // ⚠️ show ONLY at creation time
+    spread_type: account.spread_type,
+    spread_pips: account.spread_pips,
+    commission_per_lot: account.commission_per_lot,
+
+    swap_enabled: account.swap_enabled,
+    swap_charge: account.swap_charge,
+
+    // ⚠️ Only once
     trade_password: tradePasswordPlain,
     watch_password: watchPasswordPlain,
   };

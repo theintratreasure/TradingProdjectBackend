@@ -66,6 +66,12 @@ const AccountSchema = new mongoose.Schema(
       default: true,
     },
 
+    // ✅ SWAP CHARGE SNAPSHOT (From Plan)
+    swap_charge: {
+      type: Number,
+      default: 0, // per lot per day
+    },
+
     //  FINANCIALS
     balance: {
       type: Number,

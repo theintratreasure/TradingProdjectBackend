@@ -19,6 +19,8 @@ export async function bootstrapEngine({ accounts, symbols }) {
       leverage: acc.leverage,
       userId: String(acc._id), // required
       lastIp: acc.lastIp || "SYSTEM",
+      commission_per_lot: Number(acc.commission_per_lot) || 0,
+      swap_charge: Number(acc.swap_charge) || 0,
     });
   }
 

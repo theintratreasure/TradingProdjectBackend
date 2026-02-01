@@ -30,10 +30,16 @@ async function start() {
   // =========================
   // 2️⃣ LOAD DATA FROM DB
   // =========================
-  const accounts = await Account.find(
-    { status: "active" },
-    { balance: 1, leverage: 1 }
-  ).lean();
+const accounts = await Account.find(
+  { status: "active" },
+  {
+    balance: 1,
+    leverage: 1,
+    user_id: 1,
+    commission_per_lot: 1,
+    swap_charge: 1,
+  }
+).lean();
 
 
   const symbols = await Instrument.find(

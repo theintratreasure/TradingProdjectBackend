@@ -5,7 +5,7 @@ import redis from '../config/redis.js';
  * Redis cache config
  */
 const CACHE_KEY = 'account_plans_active';
-const CACHE_TTL = 60; // ⬅️ testing ke liye 60 sec (5 sec bahut kam hai)
+const CACHE_TTL = 60; // testing ke liye 60 sec
 
 /**
  * Ensure only one default demo plan exists
@@ -13,13 +13,13 @@ const CACHE_TTL = 60; // ⬅️ testing ke liye 60 sec (5 sec bahut kam hai)
 async function ensureSingleDefaultDemoPlan({ planId, makeDefault }) {
   if (!makeDefault) return;
 
-  // 1) If making this plan default, first unset default from all others
+  // 1) Unset default from others
   await AccountPlan.updateMany(
     { _id: { $ne: planId }, is_default_demo_plan: true },
     { $set: { is_default_demo_plan: false } }
   );
 
-  // 2) Ensure this plan has demo allowed + active (optional but recommended)
+  // 2) Force demo + active
   await AccountPlan.updateOne(
     { _id: planId },
     {
@@ -32,18 +32,47 @@ async function ensureSingleDefaultDemoPlan({ planId, makeDefault }) {
   );
 }
 
+/**
+ * Normalize Plan Data (Spread / Commission / Swap Safety)
+ */
+function normalizePlanData(data) {
+  return {
+    ...data,
+
+    spreadPips:
+      typeof data.spreadPips === 'number' ? data.spreadPips : 0,
+
+    commission_per_lot:
+      typeof data.commission_per_lot === 'number'
+        ? data.commission_per_lot
+        : 0,
+
+    swap_charge:
+      typeof data.swap_charge === 'number'
+        ? data.swap_charge
+        : 0,
+
+    swap_enabled:
+      typeof data.swap_enabled === 'boolean'
+        ? data.swap_enabled
+        : true
+  };
+}
+
 /* ================= CREATE ================= */
 
 export async function createPlan(data) {
-  const plan = await AccountPlan.create(data);
+  const normalizedData = normalizePlanData(data);
 
-  // ✅ only one default demo plan allowed
+  const plan = await AccountPlan.create(normalizedData);
+
+  // only one default demo plan
   await ensureSingleDefaultDemoPlan({
     planId: plan._id,
     makeDefault: Boolean(plan.is_default_demo_plan)
   });
 
-  // invalidate redis cache
+  // clear cache
   await redis.del(CACHE_KEY);
 
   return plan;
@@ -52,10 +81,8 @@ export async function createPlan(data) {
 /* ================= UPDATE ================= */
 
 export async function updatePlan(id, data) {
-  // ✅ If admin is setting default demo plan true
   const wantsDefaultDemoPlan = data?.is_default_demo_plan === true;
 
-  // If wants default demo -> first unset all others BEFORE updating this one
   if (wantsDefaultDemoPlan) {
     await AccountPlan.updateMany(
       { _id: { $ne: id }, is_default_demo_plan: true },
@@ -63,10 +90,12 @@ export async function updatePlan(id, data) {
     );
   }
 
+  const normalizedData = normalizePlanData(data);
+
   const plan = await AccountPlan.findByIdAndUpdate(
     id,
     {
-      ...data,
+      ...normalizedData,
       ...(wantsDefaultDemoPlan
         ? {
             is_demo_allowed: true,
@@ -83,7 +112,7 @@ export async function updatePlan(id, data) {
     throw err;
   }
 
-  // invalidate redis cache
+  // clear cache
   await redis.del(CACHE_KEY);
 
   return plan;
@@ -100,7 +129,6 @@ export async function deletePlan(id) {
     throw err;
   }
 
-  // invalidate redis cache
   await redis.del(CACHE_KEY);
 }
 
@@ -115,11 +143,12 @@ export async function getAllPlansAdmin() {
 export async function getActivePlans() {
   const start = process.hrtime.bigint();
 
-  // 1️⃣ Redis GET
+  // Redis GET
   const cached = await redis.get(CACHE_KEY);
 
   if (cached) {
     const end = process.hrtime.bigint();
+
     console.log(
       'REDIS HIT |',
       Number(end - start) / 1_000_000,
@@ -131,12 +160,12 @@ export async function getActivePlans() {
 
   console.log('REDIS MISS');
 
-  // 2️⃣ MongoDB query
+  // Mongo Query
   const plans = await AccountPlan.find({ isActive: true })
     .sort({ createdAt: -1 })
     .lean();
 
-  // 3️⃣ Redis SET
+  // Redis SET
   await redis.set(
     CACHE_KEY,
     JSON.stringify(plans),
@@ -145,6 +174,7 @@ export async function getActivePlans() {
   );
 
   const end = process.hrtime.bigint();
+
   console.log(
     'DB + REDIS SET |',
     Number(end - start) / 1_000_000,
