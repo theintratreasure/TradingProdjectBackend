@@ -14,6 +14,7 @@ export async function accountLoginService({
   password,
   ip,
   device,
+  fcmToken,
 }) {
   if (!account_number || !password) {
     throw new Error("Invalid request");
@@ -56,16 +57,16 @@ export async function accountLoginService({
       { _id: auth._id },
       { $inc: { login_attempts: 1 } }
     );
+
     throw new Error("Invalid credentials");
   }
 
   const tokenPayload = {
-  accountId: account._id.toString(),
-  userId: account.user_id.toString(), // 🔥 MUST
-  account_number: account.account_number,
-  sessionType,
-};
-
+    accountId: account._id.toString(),
+    userId: account.user_id.toString(),
+    account_number: account.account_number,
+    sessionType,
+  };
 
   const tradeToken = signAccountToken(tokenPayload);
 
@@ -74,9 +75,14 @@ export async function accountLoginService({
     {
       $set: {
         login_attempts: 0,
+
         last_login_at: new Date(),
         last_login_ip: ip || null,
         last_login_device: device || null,
+
+        // ✅ FCM TOKEN SAVE
+        fcm_token: fcmToken || null,
+
         access_token_hash: sha256(tradeToken),
         access_token_expires_at: new Date(
           Date.now() + 15 * 60 * 1000
@@ -93,6 +99,7 @@ export async function accountLoginService({
     account_type: account.account_type,
   };
 }
+
 /* =====================================================
    RESET TRADE PASSWORD (USER SETS PASSWORD)
 ===================================================== */

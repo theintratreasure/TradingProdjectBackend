@@ -38,6 +38,13 @@ const AccountAuthSchema = new mongoose.Schema(
     last_login_ip: String,
     last_login_device: String,
 
+    // ✅ ADD THIS
+    fcm_token: {
+      type: String,
+      default: null,
+      index: true,
+    },
+
     access_token_hash: {
       type: String,
       select: false,

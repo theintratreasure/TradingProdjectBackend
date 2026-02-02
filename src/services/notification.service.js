@@ -73,7 +73,7 @@ export async function broadcastNotification({
     fcm: response
   };
 }
-// send a single notification to a specific token/usr
+// send a single notification to a specific user (via AccountAuth)
 export async function sendUserNotification({
   userId,
   title,
@@ -84,12 +84,18 @@ export async function sendUserNotification({
     throw new Error('userId, title and message are required');
   }
 
-  const devices = await UserDevice.find(
-    { user_id: userId },   // ✅ FIXED
+  // ✅ Get tokens from AccountAuth
+  const accounts = await AccountAuth.find(
+    {
+      user_id: userId,
+      fcm_token: { $ne: null },
+    },
     { fcm_token: 1, _id: 0 }
   ).lean();
 
-  const tokens = devices.map(d => d.fcm_token).filter(Boolean);
+  const tokens = accounts
+    .map(acc => acc.fcm_token)
+    .filter(Boolean);
 
   if (tokens.length === 0) {
     console.log("⚠️ No FCM tokens for user:", userId);
@@ -98,20 +104,25 @@ export async function sendUserNotification({
 
   const response = await admin.messaging().sendEachForMulticast({
     tokens,
+
     data: {
       title,
       body: message,
       ...(data || {})
     },
+
     webpush: {
-      headers: { Urgency: 'high' }
+      headers: {
+        Urgency: 'high'
+      }
     }
   });
 
-  console.log("✅ KYC notification sent:", response);
+  console.log("✅ Notification sent:", response);
 
   return response;
 }
+
 export async function getUserNotificationsService(userId, limit = 20, page = 1) {
   if (!userId) {
     throw new Error('User not authenticated');
