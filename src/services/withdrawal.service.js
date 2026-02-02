@@ -3,6 +3,7 @@ import Withdrawal from "../models/Withdrawal.model.js";
 import Account from "../models/Account.model.js";
 import Transaction from "../models/Transaction.model.js";
 import User from "../models/User.model.js";
+import Trade from "../models/Trade.model.js";
 
 /* -------------------- HELPERS -------------------- */
 
@@ -134,8 +135,12 @@ export const createWithdrawal = async ({ userId, ipAddress, payload }) => {
     let createdWithdrawal = null;
 
     await session.withTransaction(async () => {
-      // ✅ KYC CHECK
-      const user = await User.findById(userId).select("kycStatus").session(session);
+      /* =========================
+         KYC CHECK
+      ========================== */
+      const user = await User.findById(userId)
+        .select("kycStatus")
+        .session(session);
 
       if (!user) {
         throw new Error("User not found");
@@ -145,8 +150,13 @@ export const createWithdrawal = async ({ userId, ipAddress, payload }) => {
         throw new Error("KYC not verified. Please complete KYC to withdraw");
       }
 
-      // ✅ ACCOUNT CHECK
-      const account = await Account.findOne({ _id: accountId, user_id: userId }).session(session);
+      /* =========================
+         ACCOUNT CHECK
+      ========================== */
+      const account = await Account.findOne({
+        _id: accountId,
+        user_id: userId,
+      }).session(session);
 
       if (!account) {
         throw new Error("Account not found");
@@ -164,7 +174,9 @@ export const createWithdrawal = async ({ userId, ipAddress, payload }) => {
         throw new Error("Withdrawal allowed only after first approved deposit");
       }
 
-      // ✅ only 1 pending withdrawal per account
+      /* =========================
+         PENDING WITHDRAW CHECK
+      ========================== */
       const pending = await Withdrawal.findOne({
         user: userId,
         account: account._id,
@@ -175,14 +187,35 @@ export const createWithdrawal = async ({ userId, ipAddress, payload }) => {
         throw new Error("You already have a pending withdrawal request");
       }
 
-      const holdBalance = typeof account.hold_balance === "number" ? account.hold_balance : 0;
+      /* =========================
+         OPEN TRADE CHECK (DB)
+      ========================== */
+      const openTrade = await Trade.exists({
+        accountId: account._id,
+        status: "OPEN",
+      }).session(session);
 
-      // ✅ balance check (because we deduct now)
+      if (openTrade) {
+        throw new Error(
+          "Please close your all trade before processing any withdrawal"
+        );
+      }
+
+      /* =========================
+         BALANCE CHECK
+      ========================== */
+      const holdBalance =
+        typeof account.hold_balance === "number"
+          ? account.hold_balance
+          : 0;
+
       if (amount > account.balance) {
         throw new Error("Insufficient balance");
       }
 
-      // ✅ LOCK FUNDS: DEDUCT BALANCE + MOVE TO HOLD
+      /* =========================
+         LOCK FUNDS
+      ========================== */
       account.balance = account.balance - amount;
       account.hold_balance = holdBalance + amount;
 
@@ -190,11 +223,14 @@ export const createWithdrawal = async ({ userId, ipAddress, payload }) => {
         throw new Error("Insufficient balance");
       }
 
-      // ✅ FIX EQUITY (recommended: equity = balance)
+      // equity = balance
       account.equity = account.balance;
 
       await account.save({ session });
 
+      /* =========================
+         CREATE WITHDRAWAL
+      ========================== */
       const withdrawalDocs = await Withdrawal.create(
         [
           {
@@ -220,6 +256,9 @@ export const createWithdrawal = async ({ userId, ipAddress, payload }) => {
 
       createdWithdrawal = withdrawalDocs[0];
 
+      /* =========================
+         TRANSACTION LOG
+      ========================== */
       await Transaction.create(
         [
           {
@@ -232,7 +271,8 @@ export const createWithdrawal = async ({ userId, ipAddress, payload }) => {
             referenceType: "WITHDRAWAL",
             referenceId: createdWithdrawal._id,
             createdBy: userId,
-            remark: "Withdrawal request created (balance deducted and amount locked in hold)",
+            remark:
+              "Withdrawal request created (balance deducted and amount locked in hold)",
           },
         ],
         { session },
@@ -255,6 +295,7 @@ export const createWithdrawal = async ({ userId, ipAddress, payload }) => {
     session.endSession();
   }
 };
+
 
 /* -------------------- USER: LIST WITHDRAWALS -------------------- */
 

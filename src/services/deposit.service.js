@@ -1,11 +1,12 @@
 /* CREATE DEPOSIT */
-import mongoose from 'mongoose';
-import Deposit from '../models/Deposit.model.js';
-import Account from '../models/Account.model.js';
-import AccountPlan from '../models/AccountPlan.model.js';
-import DepositModel from '../models/Deposit.model.js';
-import Transaction from '../models/Transaction.model.js';
-import redis from '../config/redis.js';
+import mongoose from "mongoose";
+import Deposit from "../models/Deposit.model.js";
+import Account from "../models/Account.model.js";
+import AccountPlan from "../models/AccountPlan.model.js";
+import DepositModel from "../models/Deposit.model.js";
+import Transaction from "../models/Transaction.model.js";
+import redis from "../config/redis.js";
+import EngineSync from "../trade-engine/EngineSync.js";
 
 export async function createDepositService({
   userId,
@@ -13,50 +14,48 @@ export async function createDepositService({
   amount,
   method,
   proof,
-  ipAddress
+  ipAddress,
 }) {
   /* ---------------- BASIC VALIDATION ---------------- */
 
   if (!account || !amount || !method || !proof) {
-    throw new Error('All fields are required');
+    throw new Error("All fields are required");
   }
 
   // amount must be a valid pure number
-  if (typeof amount !== 'number' || Number.isNaN(amount)) {
-    throw new Error('Invalid deposit amount');
+  if (typeof amount !== "number" || Number.isNaN(amount)) {
+    throw new Error("Invalid deposit amount");
   }
 
   // system-wide minimum deposit
   if (amount < 50) {
-    throw new Error('Minimum deposit amount is $50');
+    throw new Error("Minimum deposit amount is $50");
   }
 
   /* ---------------- ACCOUNT VALIDATION ---------------- */
   const userAccount = await Account.findOne({
     _id: account,
     user_id: userId,
-    status: 'active'
+    status: "active",
   }).lean();
 
   if (!userAccount) {
-    throw new Error('Account not found or inactive');
+    throw new Error("Account not found or inactive");
   }
 
   /* ---------------- FIRST DEPOSIT LOGIC ---------------- */
 
   // If first_deposit flag is FALSE → this is first deposit
   if (userAccount.first_deposit === false) {
-    const plan = await AccountPlan.findById(
-      userAccount.account_plan_id
-    ).lean();
+    const plan = await AccountPlan.findById(userAccount.account_plan_id).lean();
 
     if (!plan) {
-      throw new Error('Account plan not found');
+      throw new Error("Account plan not found");
     }
 
     if (amount < plan.minDeposit) {
       throw new Error(
-        `Minimum first deposit for this account is $${plan.minDeposit}`
+        `Minimum first deposit for this account is $${plan.minDeposit}`,
       );
     }
   }
@@ -69,7 +68,7 @@ export async function createDepositService({
     amount,
     method,
     proof,
-    ipAddress
+    ipAddress,
   });
 
   return deposit;
@@ -87,7 +86,7 @@ export async function getUserDepositsService({
   limit = 10,
   startDate,
   endDate,
-  status
+  status,
 }) {
   const safePage = Math.max(Number(page) || 1, 1);
   const safeLimit = Math.min(Math.max(Number(limit) || 10, 1), 50);
@@ -95,7 +94,7 @@ export async function getUserDepositsService({
 
   /** BASE FILTER */
   const filter = {
-    user: userId
+    user: userId,
   };
 
   /** STATUS FILTER (PENDING / APPROVED / REJECTED) */
@@ -118,26 +117,23 @@ export async function getUserDepositsService({
 
   /** PARALLEL QUERIES (FAST) */
   const [data, total] = await Promise.all([
-    DepositModel.find(
-      filter,
-      {
-        amount: 1,
-        method: 1,
-        status: 1,
-        proof: 1,
-        rejectionReason: 1,
-        createdAt: 1,
-        actionAt: 1,
-        account: 1
-      }
-    )
+    DepositModel.find(filter, {
+      amount: 1,
+      method: 1,
+      status: 1,
+      proof: 1,
+      rejectionReason: 1,
+      createdAt: 1,
+      actionAt: 1,
+      account: 1,
+    })
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(safeLimit)
-      .populate('account', 'account_number')
+      .populate("account", "account_number")
       .lean(),
 
-    DepositModel.countDocuments(filter)
+    DepositModel.countDocuments(filter),
   ]);
 
   return {
@@ -146,18 +142,17 @@ export async function getUserDepositsService({
       page: safePage,
       limit: safeLimit,
       total,
-      totalPages: Math.ceil(total / safeLimit)
-    }
+      totalPages: Math.ceil(total / safeLimit),
+    },
   };
 }
-
 
 /* USER STATUS CHECK */
 export async function getDepositStatusService(userId, depositId) {
   const deposit = await Deposit.findOne(
     {
       _id: depositId,
-      user: userId
+      user: userId,
     },
     {
       // ✅ USER SAFE FIELDS ONLY
@@ -165,26 +160,21 @@ export async function getDepositStatusService(userId, depositId) {
       method: 1,
       status: 1,
       rejectionReason: 1,
-      'proof.image_url': 1, // ✅ ONLY IMAGE URL (SAFE)
+      "proof.image_url": 1, // ✅ ONLY IMAGE URL (SAFE)
       createdAt: 1,
-      actionAt: 1
-    }
+      actionAt: 1,
+    },
   ).lean(); // ✅ FAST
 
   if (!deposit) {
-    throw new Error('Deposit not found');
+    throw new Error("Deposit not found");
   }
 
   return deposit;
 }
 
-
 /* ADMIN GET ALL */
-export async function adminGetAllDepositsService({
-  page,
-  limit,
-  filters
-}) {
+export async function adminGetAllDepositsService({ page, limit, filters }) {
   const query = {};
 
   if (filters?.status) {
@@ -217,18 +207,18 @@ export async function adminGetAllDepositsService({
     Deposit.find(query)
       .populate({
         path: "user",
-        select: "name email"
+        select: "name email",
       })
       .populate({
         path: "account",
-        select: "account_number plan_name"
+        select: "account_number plan_name",
       })
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
       .lean(),
 
-    Deposit.countDocuments(query)
+    Deposit.countDocuments(query),
   ]);
 
   const result = { records, total };
@@ -239,103 +229,121 @@ export async function adminGetAllDepositsService({
   return result;
 }
 
-
-/* ADMIN APPROVE */
+/* =========================
+   ADMIN APPROVE DEPOSIT
+========================== */
 export async function approveDepositService(depositId, adminId) {
   const session = await mongoose.startSession();
-  session.startTransaction();
 
   try {
-    // 1. Fetch pending deposit
-    const deposit = await Deposit.findOne({
-      _id: depositId,
-      status: "PENDING"
-    }).session(session);
+    await session.withTransaction(async () => {
+      /* =========================
+         1. FETCH PENDING DEPOSIT
+      ========================== */
+      const deposit = await Deposit.findOne({
+        _id: depositId,
+        status: "PENDING",
+      }).session(session);
 
-    if (!deposit) {
-      throw new Error("Deposit not found or already processed");
-    }
+      if (!deposit) {
+        throw new Error("Deposit not found or already processed");
+      }
 
-    // 2. Fetch account
-    const account = await Account.findById(deposit.account).session(session);
-    if (!account) {
-      throw new Error("Account not found");
-    }
+      /* =========================
+         2. FETCH ACCOUNT
+      ========================== */
+      const account = await Account.findById(deposit.account).session(session);
 
-    // 3. LIVE account check (IMPORTANT)
-    if (account.account_type !== "live") {
-      throw new Error("Deposit is allowed only for LIVE accounts");
-    }
+      if (!account) {
+        throw new Error("Account not found");
+      }
 
-    // 4. Calculate new balance
-    const newBalance = account.balance + deposit.amount;
+      /* =========================
+         3. LIVE ACCOUNT CHECK
+      ========================== */
+      if (account.account_type !== "live") {
+        throw new Error("Deposit is allowed only for LIVE accounts");
+      }
 
-    // 5. Update deposit status
-    deposit.status = "APPROVED";
-    deposit.actionBy = adminId;
-    deposit.actionAt = new Date();
-    deposit.rejectionReason = "";
-    await deposit.save({ session });
+      /* =========================
+         4. CALCULATE BALANCE
+      ========================== */
+      const newBalance = account.balance + deposit.amount;
 
-    // 6. Update account balance + first deposit flag
-    await Account.updateOne(
-      { _id: account._id },
-      {
-        $set: {
-          balance: newBalance,
-          first_deposit: true
-        }
-      },
-      { session }
-    );
+      /* =========================
+         5. UPDATE DEPOSIT
+      ========================== */
+      deposit.status = "APPROVED";
+      deposit.actionBy = adminId;
+      deposit.actionAt = new Date();
+      deposit.rejectionReason = "";
 
-    // 7. Create transaction ledger entry
-    await Transaction.create(
-      [
+      await deposit.save({ session });
+
+      /* =========================
+         6. UPDATE ACCOUNT
+      ========================== */
+      await Account.updateOne(
+        { _id: account._id },
         {
-          user: deposit.user,
-          account: deposit.account,
-          type: "DEPOSIT",
-          amount: deposit.amount,
-          balanceAfter: newBalance,
-          status: "SUCCESS",
-          referenceType: "DEPOSIT",
-          referenceId: deposit._id,
-          createdBy: adminId,
-          remark: "Deposit approved"
-        }
-      ],
-      { session }
-    );
+          $set: {
+            balance: newBalance,
+            first_deposit: true,
+          },
+        },
+        { session },
+      );
 
-    await session.commitTransaction();
-    session.endSession();
+      /* =========================
+         7. TRANSACTION LOG
+      ========================== */
+      await Transaction.create(
+        [
+          {
+            user: deposit.user,
+            account: deposit.account,
+            type: "DEPOSIT",
+            amount: deposit.amount,
+            balanceAfter: newBalance,
+            status: "SUCCESS",
+            referenceType: "DEPOSIT",
+            referenceId: deposit._id,
+            createdBy: adminId,
+            remark: "Deposit approved",
+          },
+        ],
+        { session },
+      );
+    });
+
+    /* =========================
+       SYNC ENGINE (AFTER COMMIT)
+    ========================== */
+    await EngineSync.onDeposit(deposit.account, deposit.amount);
 
     return {
       success: true,
-      depositId: deposit._id,
-      balance: newBalance
+      depositId,
     };
   } catch (err) {
-    await session.abortTransaction();
-    session.endSession();
     throw err;
+  } finally {
+    session.endSession();
   }
 }
 
-
 /* ADMIN REJECT */
 export async function rejectDepositService(depositId, adminId, reason) {
-  if (!reason) throw new Error('Rejection reason required');
+  if (!reason) throw new Error("Rejection reason required");
 
   const deposit = await Deposit.findById(depositId);
-  if (!deposit) throw new Error('Deposit not found');
+  if (!deposit) throw new Error("Deposit not found");
 
-  if (deposit.status !== 'PENDING') {
-    throw new Error('Action already processed by admin');
+  if (deposit.status !== "PENDING") {
+    throw new Error("Action already processed by admin");
   }
 
-  deposit.status = 'REJECTED';
+  deposit.status = "REJECTED";
   deposit.rejectionReason = reason;
   deposit.actionBy = adminId;
   deposit.actionAt = new Date();
@@ -352,26 +360,24 @@ export async function rejectDepositService(depositId, adminId, reason) {
 export async function editDepositAmountService({
   depositId,
   newAmount,
-  adminId
+  adminId,
 }) {
   if (!depositId) {
-    throw new Error('Deposit ID is required');
+    throw new Error("Deposit ID is required");
   }
 
   if (!newAmount || newAmount <= 0) {
-    throw new Error('Invalid deposit amount');
+    throw new Error("Invalid deposit amount");
   }
 
   // 1️⃣ Find pending deposit
   const deposit = await Deposit.findOne({
     _id: depositId,
-    status: 'PENDING'
+    status: "PENDING",
   });
 
   if (!deposit) {
-    const err = new Error(
-      'Deposit not found or already processed'
-    );
+    const err = new Error("Deposit not found or already processed");
     err.statusCode = 400;
     throw err;
   }
@@ -386,6 +392,6 @@ export async function editDepositAmountService({
   return {
     _id: deposit._id,
     amount: deposit.amount,
-    status: deposit.status
+    status: deposit.status,
   };
 }

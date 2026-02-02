@@ -644,8 +644,10 @@ export async function handleClientMessage(clientWs, msg) {
       if (market === "crypto") wsCrypto.subscribe(symbol);
       if (market === "stock") wsStock.subscribe(symbol);
 
-      const hl = await HighLowService.getDayHighLow(market, symbol).catch(
-        () => null,
+      const hl = await new Promise((resolve) =>
+        setTimeout(async () => {
+          resolve(await HighLowService.getDayHighLow(market, symbol));
+        }, 150),
       );
 
       try {

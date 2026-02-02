@@ -1,6 +1,7 @@
 // src/trade-engine/Engine.js
 
 import { v4 as uuidv4 } from "uuid";
+import { validateOrder } from "./order.validator.js";
 import { AccountState } from "./AccountState.js";
 import { Position } from "./Position.js";
 import { RiskManager } from "./RiskManager.js";
@@ -205,6 +206,17 @@ export class Engine {
     if (!sym) throw new Error("Invalid symbol");
     if (sym.bid <= 0 || sym.ask <= 0) throw new Error("Price not ready");
 
+    // Run validation for MARKET order (SL/TP vs current market)
+    validateOrder({
+      side,
+      orderType: "MARKET",
+      price: null,
+      stopLoss,
+      takeProfit,
+      bid: sym.bid,
+      ask: sym.ask,
+    });
+
     // If overrideOpenPrice provided (e.g. for pending fill at its limit), prefer it
     const openPrice = typeof overrideOpenPrice === "number" ? overrideOpenPrice : (side === "BUY" ? sym.ask : sym.bid);
     const leverage = Math.min(account.leverage, sym.maxLeverage);
@@ -361,6 +373,17 @@ export class Engine {
       throw new Error("Invalid pending order type");
     }
 
+    // run validation for pending order
+    validateOrder({
+      side,
+      orderType,
+      price: Number(price),
+      stopLoss: stopLoss !== undefined ? stopLoss : null,
+      takeProfit: takeProfit !== undefined ? takeProfit : null,
+      bid: sym.bid,
+      ask: sym.ask,
+    });
+
     if (!account.pendingOrders) {
       account.pendingOrders = new Map();
     }
@@ -417,6 +440,27 @@ export class Engine {
 
     if (!order) throw new Error("Pending order not found");
 
+    // compute prospective new values (to validate)
+    const newPrice = typeof price === "number" ? price : order.price;
+    const newStop = typeof stopLoss === "number" ? stopLoss : order.stopLoss;
+    const newTake = typeof takeProfit === "number" ? takeProfit : order.takeProfit;
+
+    // get symbol config for validation
+    const sym = this.symbols.get(order.symbol);
+    if (!sym) throw new Error("Symbol not loaded");
+
+    // Validate the modified order BEFORE applying
+    validateOrder({
+      side: order.side,
+      orderType: order.orderType,
+      price: Number(newPrice),
+      stopLoss: newStop !== undefined ? newStop : null,
+      takeProfit: newTake !== undefined ? newTake : null,
+      bid: sym.bid,
+      ask: sym.ask,
+    });
+
+    // Apply updates
     if (typeof price === "number") order.price = price;
     if (typeof stopLoss === "number") order.stopLoss = stopLoss;
     if (typeof takeProfit === "number") order.takeProfit = takeProfit;
@@ -477,260 +521,260 @@ export class Engine {
        execute safely (placeMarketOrder first, then ledger enqueue & emits)
   ========================== */
 
-async onTick(symbol, bid, ask) {
-  const sym = this.symbols.get(symbol);
-  if (!sym) return;
+  async onTick(symbol, bid, ask) {
+    const sym = this.symbols.get(symbol);
+    if (!sym) return;
 
-  sym.bid = bid;
-  sym.ask = ask;
-  sym.lastTickAt = Date.now();
+    sym.bid = bid;
+    sym.ask = ask;
+    sym.lastTickAt = Date.now();
 
 
-  for (const account of this.accounts.values()) {
-    /* =====================
-       PENDING ORDERS
-    ====================== */
+    for (const account of this.accounts.values()) {
+      /* =====================
+         PENDING ORDERS
+      ====================== */
 
-    if (account.pendingOrders?.size) {
-      const now = Date.now();
+      if (account.pendingOrders?.size) {
+        const now = Date.now();
 
-      for (const order of Array.from(account.pendingOrders.values())) {
-        /* ===== EXPIRE ===== */
+        for (const order of Array.from(account.pendingOrders.values())) {
+          /* ===== EXPIRE ===== */
 
-        if (order.expireAt && now >= order.expireAt) {
-          account.pendingOrders.delete(order.orderId);
+          if (order.expireAt && now >= order.expireAt) {
+            account.pendingOrders.delete(order.orderId);
 
-          ledgerQueue.enqueue("ORDER_PENDING_CANCEL", {
-            orderId: order.orderId,
-            reason: "EXPIRED",
-          });
-
-          try {
-            engineEvents.emit("LIVE_PENDING_CANCEL", {
-              accountId: account.accountId,
+            ledgerQueue.enqueue("ORDER_PENDING_CANCEL", {
               orderId: order.orderId,
               reason: "EXPIRED",
             });
-          } catch (err) {
-            console.error("[ENGINE] emit LIVE_PENDING_CANCEL failed", err);
+
+            try {
+              engineEvents.emit("LIVE_PENDING_CANCEL", {
+                accountId: account.accountId,
+                orderId: order.orderId,
+                reason: "EXPIRED",
+              });
+            } catch (err) {
+              console.error("[ENGINE] emit LIVE_PENDING_CANCEL failed", err);
+            }
+
+            continue;
           }
 
-          continue;
-        }
+          /* ===== LIVE UPDATE ===== */
 
-        /* ===== LIVE UPDATE ===== */
-
-        if (order.symbol === symbol) {
-          try {
-            engineEvents.emit("LIVE_PENDING", {
-              ...order,
-              accountId: account.accountId,
-              currentPrice: order.side === "BUY" ? ask : bid,
-              ageMs: Date.now() - (order.createdAt || Date.now()),
-              status: "PENDING",
-            });
-          } catch (err) {
-            console.error("[ENGINE] emit LIVE_PENDING failed", err);
+          if (order.symbol === symbol) {
+            try {
+              engineEvents.emit("LIVE_PENDING", {
+                ...order,
+                accountId: account.accountId,
+                currentPrice: order.side === "BUY" ? ask : bid,
+                ageMs: Date.now() - (order.createdAt || Date.now()),
+                status: "PENDING",
+              });
+            } catch (err) {
+              console.error("[ENGINE] emit LIVE_PENDING failed", err);
+            }
           }
-        }
 
-        if (order.symbol !== symbol) continue;
+          if (order.symbol !== symbol) continue;
 
-        /* ===== HIT CHECK ===== */
+          /* ===== HIT CHECK ===== */
 
-        const hit =
-          (order.orderType === "BUY_LIMIT" && ask <= order.price) ||
-          (order.orderType === "SELL_LIMIT" && bid >= order.price) ||
-          (order.orderType === "BUY_STOP" && ask >= order.price) ||
-          (order.orderType === "SELL_STOP" && bid <= order.price);
+          const hit =
+            (order.orderType === "BUY_LIMIT" && ask <= order.price) ||
+            (order.orderType === "SELL_LIMIT" && bid >= order.price) ||
+            (order.orderType === "BUY_STOP" && ask >= order.price) ||
+            (order.orderType === "SELL_STOP" && bid <= order.price);
 
-        if (!hit) continue;
+          if (!hit) continue;
 
-        /* ===== EXECUTE ===== */
-
-        try {
-          const position = this.placeMarketOrder({
-            accountId: order.accountId,
-            symbol: order.symbol,
-            side: order.side,
-            volume: order.volume,
-            stopLoss: order.stopLoss,
-            takeProfit: order.takeProfit,
-            overrideOpenPrice: order.price,
-          });
-
-          // remove pending
-          account.pendingOrders.delete(order.orderId);
-
-          ledgerQueue.enqueue("ORDER_PENDING_EXECUTE", {
-            ...order,
-            executedAt: Date.now(),
-            executedPositionId: position.positionId,
-          });
+          /* ===== EXECUTE ===== */
 
           try {
-            engineEvents.emit("LIVE_PENDING_EXECUTE", {
-              accountId: account.accountId,
-              orderId: order.orderId,
+            const position = this.placeMarketOrder({
+              accountId: order.accountId,
               symbol: order.symbol,
               side: order.side,
-              orderType: order.orderType,
-              price: order.price,
               volume: order.volume,
               stopLoss: order.stopLoss,
               takeProfit: order.takeProfit,
-              createdAt: order.createdAt,
-              executedAt: Date.now(),
-              positionId: position.positionId,
+              overrideOpenPrice: order.price,
             });
-          } catch (err) {
-            console.error("[ENGINE] emit LIVE_PENDING_EXECUTE failed", err);
-          }
 
-          try {
-            engineEvents.emit("ORDER_EXECUTED", {
-              accountId: account.accountId,
-              orderId: order.orderId,
-              positionId: position.positionId,
-            });
-          } catch (err) {
-            console.error("[ENGINE] emit ORDER_EXECUTED failed", err);
-          }
-        }
-
-        /* ===== EXECUTE FAILED ===== */
-
-        catch (err) {
-          const reason =
-            err && err.message ? err.message : "EXECUTION_FAILED";
-
-          console.error("[ENGINE] Pending execution failed", {
-            orderId: order.orderId,
-            accountId: account.accountId,
-            userId: order.userId,
-            symbol: order.symbol,
-            side: order.side,
-            type: order.orderType,
-            price: order.price,
-            volume: order.volume,
-            balance: account.balance,
-            equity: account.equity,
-            freeMargin: account.freeMargin,
-            usedMargin: account.usedMargin,
-            reason,
-          });
-
-          // remove failed order (no retry loop)
-          if (account.pendingOrders instanceof Map) {
+            // remove pending
             account.pendingOrders.delete(order.orderId);
+
+            ledgerQueue.enqueue("ORDER_PENDING_EXECUTE", {
+              ...order,
+              executedAt: Date.now(),
+              executedPositionId: position.positionId,
+            });
+
+            try {
+              engineEvents.emit("LIVE_PENDING_EXECUTE", {
+                accountId: account.accountId,
+                orderId: order.orderId,
+                symbol: order.symbol,
+                side: order.side,
+                orderType: order.orderType,
+                price: order.price,
+                volume: order.volume,
+                stopLoss: order.stopLoss,
+                takeProfit: order.takeProfit,
+                createdAt: order.createdAt,
+                executedAt: Date.now(),
+                positionId: position.positionId,
+              });
+            } catch (err) {
+              console.error("[ENGINE] emit LIVE_PENDING_EXECUTE failed", err);
+            }
+
+            try {
+              engineEvents.emit("ORDER_EXECUTED", {
+                accountId: account.accountId,
+                orderId: order.orderId,
+                positionId: position.positionId,
+              });
+            } catch (err) {
+              console.error("[ENGINE] emit ORDER_EXECUTED failed", err);
+            }
           }
 
-          ledgerQueue.enqueue("ORDER_PENDING_EXECUTE_FAILED", {
-            orderId: order.orderId,
-            accountId: account.accountId,
-            symbol: order.symbol,
-            reason,
-          });
+          /* ===== EXECUTE FAILED ===== */
 
-          try {
-            engineEvents.emit("LIVE_PENDING_EXECUTE_FAILED", {
-              accountId: account.accountId,
+          catch (err) {
+            const reason =
+              err && err.message ? err.message : "EXECUTION_FAILED";
+
+            console.error("[ENGINE] Pending execution failed", {
               orderId: order.orderId,
+              accountId: account.accountId,
+              userId: order.userId,
+              symbol: order.symbol,
+              side: order.side,
+              type: order.orderType,
+              price: order.price,
+              volume: order.volume,
+              balance: account.balance,
+              equity: account.equity,
+              freeMargin: account.freeMargin,
+              usedMargin: account.usedMargin,
+              reason,
+            });
+
+            // remove failed order (no retry loop)
+            if (account.pendingOrders instanceof Map) {
+              account.pendingOrders.delete(order.orderId);
+            }
+
+            ledgerQueue.enqueue("ORDER_PENDING_EXECUTE_FAILED", {
+              orderId: order.orderId,
+              accountId: account.accountId,
               symbol: order.symbol,
               reason,
             });
-          } catch (emitErr) {
-            console.error(
-              "[ENGINE] emit LIVE_PENDING_EXECUTE_FAILED failed",
-              emitErr
-            );
+
+            try {
+              engineEvents.emit("LIVE_PENDING_EXECUTE_FAILED", {
+                accountId: account.accountId,
+                orderId: order.orderId,
+                symbol: order.symbol,
+                reason,
+              });
+            } catch (emitErr) {
+              console.error(
+                "[ENGINE] emit LIVE_PENDING_EXECUTE_FAILED failed",
+                emitErr
+              );
+            }
           }
         }
       }
-    }
 
-    /* =====================
-       POSITIONS
-    ====================== */
+      /* =====================
+         POSITIONS
+      ====================== */
 
-    for (const pos of account.positions.values()) {
-      if (pos.symbol !== symbol) continue;
+      for (const pos of account.positions.values()) {
+        if (pos.symbol !== symbol) continue;
 
-      pos.updatePnL(bid, ask);
+        pos.updatePnL(bid, ask);
 
-      const currentPrice = pos.side === "BUY" ? bid : ask;
+        const currentPrice = pos.side === "BUY" ? bid : ask;
+
+        try {
+          engineEvents.emit("LIVE_POSITION", {
+            accountId: account.accountId,
+            positionId: pos.positionId,
+            volume: pos.volume,
+            openTime: pos.openTime,
+            symbol: pos.symbol,
+            side: pos.side,
+            openPrice: pos.openPrice,
+            currentPrice,
+            floatingPnL: Number(pos.floatingPnL.toFixed(2)),
+            stopLoss: pos.stopLoss,
+            takeProfit: pos.takeProfit,
+            commission: pos.commission || 0,
+            swapPerDay: pos.swapPerDay || 0,
+          });
+        } catch (err) {
+          console.error("[ENGINE] emit LIVE_POSITION failed", err);
+        }
+
+        /* === STOP LOSS === */
+
+        if (
+          pos.stopLoss !== null &&
+          ((pos.side === "BUY" && currentPrice <= pos.stopLoss) ||
+            (pos.side === "SELL" && currentPrice >= pos.stopLoss))
+        ) {
+          this.closePositionInternal(account, pos, "STOP_LOSS", sym);
+          continue;
+        }
+
+        /* === TAKE PROFIT === */
+
+        if (
+          pos.takeProfit !== null &&
+          ((pos.side === "BUY" && currentPrice >= pos.takeProfit) ||
+            (pos.side === "SELL" && currentPrice <= pos.takeProfit))
+        ) {
+          this.closePositionInternal(account, pos, "TAKE_PROFIT", sym);
+        }
+      }
+
+      /* =====================
+         ACCOUNT UPDATE
+      ====================== */
+
+      this.recalcUsedMargin(account);
 
       try {
-        engineEvents.emit("LIVE_POSITION", {
+        engineEvents.emit("LIVE_ACCOUNT", {
           accountId: account.accountId,
-          positionId: pos.positionId,
-          volume: pos.volume,
-          openTime: pos.openTime,
-          symbol: pos.symbol,
-          side: pos.side,
-          openPrice: pos.openPrice,
-          currentPrice,
-          floatingPnL: Number(pos.floatingPnL.toFixed(2)),
-          stopLoss: pos.stopLoss,
-          takeProfit: pos.takeProfit,
-          commission: pos.commission || 0,
-          swapPerDay: pos.swapPerDay || 0,
+          balance: Number(account.balance.toFixed(2)),
+          equity: Number(account.equity.toFixed(2)),
+          usedMargin: Number(account.usedMargin.toFixed(2)),
+          freeMargin: Number(account.freeMargin.toFixed(2)),
         });
       } catch (err) {
-        console.error("[ENGINE] emit LIVE_POSITION failed", err);
+        console.error("[ENGINE] emit LIVE_ACCOUNT failed", err);
       }
 
-      /* === STOP LOSS === */
+      /* =====================
+         RISK MANAGEMENT
+      ====================== */
 
-      if (
-        pos.stopLoss !== null &&
-        ((pos.side === "BUY" && currentPrice <= pos.stopLoss) ||
-          (pos.side === "SELL" && currentPrice >= pos.stopLoss))
-      ) {
-        this.closePositionInternal(account, pos, "STOP_LOSS", sym);
-        continue;
+      await RiskManager.checkWarning(account);
+
+      if (RiskManager.shouldStopOut(account)) {
+        this.forceCloseWorst(account);
       }
-
-      /* === TAKE PROFIT === */
-
-      if (
-        pos.takeProfit !== null &&
-        ((pos.side === "BUY" && currentPrice >= pos.takeProfit) ||
-          (pos.side === "SELL" && currentPrice <= pos.takeProfit))
-      ) {
-        this.closePositionInternal(account, pos, "TAKE_PROFIT", sym);
-      }
-    }
-
-    /* =====================
-       ACCOUNT UPDATE
-    ====================== */
-
-    this.recalcUsedMargin(account);
-
-    try {
-      engineEvents.emit("LIVE_ACCOUNT", {
-        accountId: account.accountId,
-        balance: Number(account.balance.toFixed(2)),
-        equity: Number(account.equity.toFixed(2)),
-        usedMargin: Number(account.usedMargin.toFixed(2)),
-        freeMargin: Number(account.freeMargin.toFixed(2)),
-      });
-    } catch (err) {
-      console.error("[ENGINE] emit LIVE_ACCOUNT failed", err);
-    }
-
-    /* =====================
-       RISK MANAGEMENT
-    ====================== */
-
-    await RiskManager.checkWarning(account);
-
-    if (RiskManager.shouldStopOut(account)) {
-      this.forceCloseWorst(account);
     }
   }
-}
 
 
   /* =========================
