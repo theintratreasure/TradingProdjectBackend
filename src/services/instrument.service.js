@@ -20,6 +20,7 @@ export const createInstrumentService = async (payload) => {
     qtyPrecision,
     pricePrecision,
     tickSize,
+    spread,
     contractSize,
     swapEnabled,
     swapLong,
@@ -43,6 +44,10 @@ export const createInstrumentService = async (payload) => {
     throw new Error('lotSize must be greater than zero');
   }
 
+  if (spread < 0) {
+    throw new Error('spread cannot be negative');
+  }
+
   /* =========================
      DUPLICATE CHECK (FAST)
   ========================== */
@@ -58,15 +63,16 @@ export const createInstrumentService = async (payload) => {
      CREATE INSTRUMENT
   ========================== */
   const instrument = await Instrument.create({
-    code,
+    code: code.toUpperCase(),
     name,
-    segment,
+    segment: segment.toUpperCase(),
     lotSize,
     minQty,
     maxQty,
     qtyPrecision,
     pricePrecision,
     tickSize,
+    spread,
     contractSize,
     swapEnabled,
     swapLong,
@@ -74,11 +80,15 @@ export const createInstrumentService = async (payload) => {
     isActive,
     isTradeable
   });
+
   const keys = await redis.keys('instruments:*');
   if (keys.length) await redis.del(keys);
+
   await redis.incr(VERSION_KEY);
+
   return instrument;
 };
+
 
 export async function getAllInstrumentService(page, limit, segment) {
   const skip = (page - 1) * limit;
@@ -95,13 +105,12 @@ export async function getAllInstrumentService(page, limit, segment) {
   const listKey = `${LIST_KEY}:v${version}:${seg}:p=${page}:l=${limit}`;
   const countKey = `${COUNT_KEY}:v${version}:${seg}`;
 
-  // Redis GET (single roundtrip)
+  // Redis GET
   const [cachedList, cachedCount] = await redis.mget(
     listKey,
     countKey
   );
 
-  // FULL REDIS HIT (2–4ms)
   if (cachedList && cachedCount) {
     return {
       data: JSON.parse(cachedList),
@@ -109,7 +118,7 @@ export async function getAllInstrumentService(page, limit, segment) {
     };
   }
 
-  // DB queries (only on MISS)
+  // DB queries
   const [data, total] = await Promise.all([
     cachedList
       ? JSON.parse(cachedList)
@@ -126,7 +135,7 @@ export async function getAllInstrumentService(page, limit, segment) {
         : Instrument.countDocuments(filter)
   ]);
 
-  // Redis SET (parallel, non-blocking)
+  // Cache set
   await redis.multi()
     .set(listKey, JSON.stringify(data), 'EX', LIST_TTL)
     .set(countKey, total, 'EX', COUNT_TTL)
@@ -135,6 +144,7 @@ export async function getAllInstrumentService(page, limit, segment) {
   return { data, total };
 }
 
+
 export const updateInstrumentService = async (id, payload) => {
   const existing = await Instrument.findById(id);
 
@@ -142,7 +152,9 @@ export const updateInstrumentService = async (id, payload) => {
     throw new Error('Instrument not found');
   }
 
-  // 🔒 Prevent duplicate code
+  /* =========================
+     DUPLICATE CODE CHECK
+  ========================== */
   if (payload.code && payload.code !== existing.code) {
     const alreadyExists = await Instrument.exists({
       code: payload.code.toUpperCase(),
@@ -154,23 +166,40 @@ export const updateInstrumentService = async (id, payload) => {
     }
   }
 
-  // 🧠 Safe update (only provided fields)
+  /* =========================
+     SPREAD VALIDATION
+  ========================== */
+  if (payload.spread !== undefined && payload.spread < 0) {
+    throw new Error('spread cannot be negative');
+  }
+
+  /* =========================
+     UPDATE
+  ========================== */
   const updated = await Instrument.findByIdAndUpdate(
     id,
     {
       $set: {
         ...payload,
-        code: payload.code ? payload.code.toUpperCase() : existing.code
+
+        code: payload.code
+          ? payload.code.toUpperCase()
+          : existing.code,
+
+        segment: payload.segment
+          ? payload.segment.toUpperCase()
+          : existing.segment
       }
     },
     { new: true, runValidators: true }
   ).lean();
 
-  // 🔥 Redis cache invalidate (FAST)
+  // Cache invalidate
   await redis.incr(VERSION_KEY);
 
   return updated;
 };
+
 
 export const deleteInstrumentService = async (id) => {
   if (!id || id.length !== 24) {
@@ -183,10 +212,12 @@ export const deleteInstrumentService = async (id) => {
     throw new Error('Instrument not found');
   }
 
-  // 🗑️ Hard delete
+  /* =========================
+     DELETE
+  ========================== */
   await Instrument.deleteOne({ _id: id });
 
-  // 🔥 Invalidate all instrument caches (FAST)
+  // Cache invalidate
   await redis.incr(VERSION_KEY);
 
   return instrument;

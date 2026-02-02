@@ -23,7 +23,7 @@ export class Engine {
   /**
    * loadAccount
    *
-   * NOTE: accepts optional commission_per_lot and swap_charge snapshots.
+   * NOTE: accepts optional commission_per_lot, swap_charge and spread_enabled snapshots.
    * Callers that don't pass them will keep behaviour unchanged.
    */
   loadAccount({
@@ -34,6 +34,7 @@ export class Engine {
     lastIp,
     commission_per_lot = 0,
     swap_charge = 0,
+    spread_enabled = false,
   }) {
     const acc = new AccountState({
       accountId,
@@ -44,8 +45,12 @@ export class Engine {
     });
 
     // snapshot fields (safe to add directly)
-    acc.commission_per_lot = typeof commission_per_lot === "number" ? commission_per_lot : 0;
+    acc.commission_per_lot =
+      typeof commission_per_lot === "number" ? commission_per_lot : 0;
     acc.swap_charge = typeof swap_charge === "number" ? swap_charge : 0;
+
+    // per-account spread ON/OFF
+    acc.spread_enabled = Boolean(spread_enabled);
 
     this.accounts.set(accountId, acc);
 
@@ -57,21 +62,78 @@ export class Engine {
         userId,
         commission_per_lot: acc.commission_per_lot,
         swap_charge: acc.swap_charge,
+        spread_enabled: acc.spread_enabled,
       });
     }
   }
 
   loadSymbol(symbol, config) {
+    // config may contain: contractSize, maxLeverage, spread, tickSize, pricePrecision
     this.symbols.set(symbol, {
       ...config,
       bid: 0,
       ask: 0,
+      rawBid: 0,
+      rawAsk: 0,
       lastTickAt: 0,
     });
 
     if (DEBUG_LIVE) {
       console.log("[ENGINE][SYMBOL_LOADED]", symbol, config);
     }
+  }
+
+  /* =========================
+     PRICE / SPREAD / TICK UTIL
+     - single source of truth for formatting prices
+  ========================== */
+
+  // Round a number to nearest tick safely
+  roundToTick(value, tick) {
+    if (!tick || tick <= 0) return value;
+    // avoid floating precision issues by using integer math when possible
+    const factor = 1 / tick;
+    return Math.round(value * factor) / factor;
+  }
+
+  /**
+   * formatPrice(account, sym, bid, ask)
+   *
+   * Returns { bid, ask } adjusted by:
+   *  - account.spread_enabled (if true)
+   *  - symbol spread (sym.spread)
+   *  - rounding to sym.tickSize
+   *  - fixed to sym.pricePrecision
+   */
+  formatPrice(account, sym, bid, ask) {
+    let outBid = Number(bid);
+    let outAsk = Number(ask);
+
+    // apply spread only when account has it enabled
+    if (
+      account &&
+      account.spread_enabled &&
+      typeof sym.spread === "number" &&
+      sym.spread > 0
+    ) {
+      const half = sym.spread / 2;
+      outBid = outBid - half;
+      outAsk = outAsk + half;
+    }
+
+    // tick rounding
+    if (typeof sym.tickSize === "number" && sym.tickSize > 0) {
+      outBid = this.roundToTick(outBid, sym.tickSize);
+      outAsk = this.roundToTick(outAsk, sym.tickSize);
+    }
+
+    // apply precision
+    if (typeof sym.pricePrecision === "number") {
+      outBid = Number(outBid.toFixed(sym.pricePrecision));
+      outAsk = Number(outAsk.toFixed(sym.pricePrecision));
+    }
+
+    return { bid: outBid, ask: outAsk };
   }
 
   /* =========================
@@ -127,7 +189,9 @@ export class Engine {
       takeProfit: order.takeProfit,
       expireType: order.expireType || "GTC",
       expireAt: order.expireAt ? new Date(order.expireAt).getTime() : null,
-      createdAt: order.createdAt ? new Date(order.createdAt).getTime() : Date.now(),
+      createdAt: order.createdAt
+        ? new Date(order.createdAt).getTime()
+        : Date.now(),
     });
 
     try {
@@ -143,7 +207,9 @@ export class Engine {
         takeProfit: order.takeProfit !== undefined ? order.takeProfit : null,
         expireType: order.expireType || "GTC",
         expireAt: order.expireAt ? new Date(order.expireAt).getTime() : null,
-        createdAt: order.createdAt ? new Date(order.createdAt).getTime() : Date.now(),
+        createdAt: order.createdAt
+          ? new Date(order.createdAt).getTime()
+          : Date.now(),
         status: "PENDING",
       });
     } catch (err) {
@@ -182,6 +248,7 @@ export class Engine {
       const net = Math.abs(b.buy - b.sell);
       if (net <= 0) continue;
 
+      // use market price for margin calculation (raw)
       const price = b.buy > b.sell ? sym.ask : sym.bid;
 
       totalMargin += (net * b.contractSize * price) / b.leverage;
@@ -198,7 +265,15 @@ export class Engine {
      - Swap computed and attached to position (not deducted)
   ========================== */
 
-  placeMarketOrder({ accountId, symbol, side, volume, stopLoss, takeProfit, overrideOpenPrice = null }) {
+  placeMarketOrder({
+    accountId,
+    symbol,
+    side,
+    volume,
+    stopLoss,
+    takeProfit,
+    overrideOpenPrice = null,
+  }) {
     const account = this.accounts.get(accountId);
     const sym = this.symbols.get(symbol);
 
@@ -218,7 +293,15 @@ export class Engine {
     });
 
     // If overrideOpenPrice provided (e.g. for pending fill at its limit), prefer it
-    const openPrice = typeof overrideOpenPrice === "number" ? overrideOpenPrice : (side === "BUY" ? sym.ask : sym.bid);
+    // Otherwise compute per-account formatted price
+    let openPrice;
+    if (typeof overrideOpenPrice === "number") {
+      openPrice = overrideOpenPrice;
+    } else {
+      const userPrice = this.formatPrice(account, sym, sym.bid, sym.ask);
+      openPrice = side === "BUY" ? userPrice.ask : userPrice.bid;
+    }
+
     const leverage = Math.min(account.leverage, sym.maxLeverage);
 
     const position = new Position({
@@ -252,8 +335,13 @@ export class Engine {
 
     // ====== Commission calculation & immediate deduction ======
     // Commission is charged proportional to lots: commission_per_lot * volume
-    const commissionPerLot = typeof account.commission_per_lot === "number" ? account.commission_per_lot : 0;
-    const commissionCharged = Number((commissionPerLot * position.volume).toFixed(8)); // precision safe
+    const commissionPerLot =
+      typeof account.commission_per_lot === "number"
+        ? account.commission_per_lot
+        : 0;
+    const commissionCharged = Number(
+      (commissionPerLot * position.volume).toFixed(8),
+    ); // precision safe
 
     if (commissionCharged > 0) {
       // Ensure account has enough balance to pay commission
@@ -265,7 +353,9 @@ export class Engine {
       }
 
       // Deduct commission now
-      account.balance = Number((account.balance - commissionCharged).toFixed(8));
+      account.balance = Number(
+        (account.balance - commissionCharged).toFixed(8),
+      );
       position.commission = commissionCharged;
 
       // ledger entry for commission (immediate)
@@ -282,7 +372,8 @@ export class Engine {
 
     // ====== Swap calculation (per day per lot) ======
     // Do NOT deduct here — cronjob will handle real deduction. We only compute & expose.
-    const swapPerLot = typeof account.swap_charge === "number" ? account.swap_charge : 0;
+    const swapPerLot =
+      typeof account.swap_charge === "number" ? account.swap_charge : 0;
     const swapPerDay = Number((swapPerLot * position.volume).toFixed(8));
     position.swapPerDay = swapPerDay;
 
@@ -373,7 +464,7 @@ export class Engine {
       throw new Error("Invalid pending order type");
     }
 
-    // run validation for pending order
+    // run validation for pending order (using raw market prices for validation)
     validateOrder({
       side,
       orderType,
@@ -420,7 +511,10 @@ export class Engine {
         status: "PENDING",
       });
     } catch (err) {
-      console.error("[ENGINE] emit LIVE_PENDING failed (placePendingOrder)", err);
+      console.error(
+        "[ENGINE] emit LIVE_PENDING failed (placePendingOrder)",
+        err,
+      );
     }
 
     return order;
@@ -443,13 +537,14 @@ export class Engine {
     // compute prospective new values (to validate)
     const newPrice = typeof price === "number" ? price : order.price;
     const newStop = typeof stopLoss === "number" ? stopLoss : order.stopLoss;
-    const newTake = typeof takeProfit === "number" ? takeProfit : order.takeProfit;
+    const newTake =
+      typeof takeProfit === "number" ? takeProfit : order.takeProfit;
 
     // get symbol config for validation
     const sym = this.symbols.get(order.symbol);
     if (!sym) throw new Error("Symbol not loaded");
 
-    // Validate the modified order BEFORE applying
+    // Validate the modified order BEFORE applying (using raw market prices)
     validateOrder({
       side: order.side,
       orderType: order.orderType,
@@ -475,10 +570,83 @@ export class Engine {
         status: "PENDING_MODIFIED",
       });
     } catch (err) {
-      console.error("[ENGINE] emit LIVE_PENDING failed (modifyPendingOrder)", err);
+      console.error(
+        "[ENGINE] emit LIVE_PENDING failed (modifyPendingOrder)",
+        err,
+      );
     }
 
     return order;
+  }
+  /* =========================
+   MODIFY OPEN POSITION (SL / TP)
+========================== */
+
+  modifyPosition({ accountId, positionId, stopLoss, takeProfit }) {
+    const account = this.accounts.get(accountId);
+
+    if (!account) throw new Error("Invalid account");
+
+    const pos = account.positions.get(positionId);
+
+    if (!pos) throw new Error("Position not found");
+
+    const sym = this.symbols.get(pos.symbol);
+
+    if (!sym) throw new Error("Symbol not loaded");
+
+    // current market (raw)
+    const bid = sym.bid;
+    const ask = sym.ask;
+
+    // validate new SL/TP
+    validateOrder({
+      side: pos.side,
+      orderType: "MARKET",
+      price: null,
+      stopLoss: typeof stopLoss === "number" ? stopLoss : pos.stopLoss,
+      takeProfit: typeof takeProfit === "number" ? takeProfit : pos.takeProfit,
+      bid,
+      ask,
+    });
+
+    // apply updates
+    if (typeof stopLoss === "number") {
+      pos.stopLoss = stopLoss;
+    }
+
+    if (typeof takeProfit === "number") {
+      pos.takeProfit = takeProfit;
+    }
+
+    // ledger
+    ledgerQueue.enqueue("POSITION_MODIFY", {
+      userId: account.userId,
+      accountId,
+      positionId,
+      symbol: pos.symbol,
+      stopLoss: pos.stopLoss,
+      takeProfit: pos.takeProfit,
+      updatedAt: Date.now(),
+    });
+
+    // emit update
+    try {
+      engineEvents.emit("LIVE_POSITION_MODIFY", {
+        accountId,
+        positionId,
+        stopLoss: pos.stopLoss,
+        takeProfit: pos.takeProfit,
+      });
+    } catch (err) {
+      console.error("[ENGINE] emit LIVE_POSITION_MODIFY failed", err);
+    }
+
+    return {
+      positionId,
+      stopLoss: pos.stopLoss,
+      takeProfit: pos.takeProfit,
+    };
   }
 
   /* =========================
@@ -525,10 +693,13 @@ export class Engine {
     const sym = this.symbols.get(symbol);
     if (!sym) return;
 
+    // keep both raw and public fields
+    sym.rawBid = bid;
+    sym.rawAsk = ask;
+
     sym.bid = bid;
     sym.ask = ask;
     sym.lastTickAt = Date.now();
-
 
     for (const account of this.accounts.values()) {
       /* =====================
@@ -565,11 +736,22 @@ export class Engine {
           /* ===== LIVE UPDATE ===== */
 
           if (order.symbol === symbol) {
+            // compute per-account formatted price to show currentPrice
+            let formattedPrice = { bid, ask };
+            try {
+              formattedPrice = this.formatPrice(account, sym, bid, ask);
+            } catch (err) {
+              formattedPrice = { bid, ask };
+            }
+
             try {
               engineEvents.emit("LIVE_PENDING", {
                 ...order,
                 accountId: account.accountId,
-                currentPrice: order.side === "BUY" ? ask : bid,
+                currentPrice:
+                  order.side === "BUY"
+                    ? formattedPrice.ask
+                    : formattedPrice.bid,
                 ageMs: Date.now() - (order.createdAt || Date.now()),
                 status: "PENDING",
               });
@@ -581,12 +763,22 @@ export class Engine {
           if (order.symbol !== symbol) continue;
 
           /* ===== HIT CHECK ===== */
+          // Use per-account formatted prices for hit checks when account has spread enabled,
+          // otherwise raw market prices are fine.
+          const priceForChecks =
+            account && account.spread_enabled
+              ? this.formatPrice(account, sym, bid, ask)
+              : { bid, ask };
 
           const hit =
-            (order.orderType === "BUY_LIMIT" && ask <= order.price) ||
-            (order.orderType === "SELL_LIMIT" && bid >= order.price) ||
-            (order.orderType === "BUY_STOP" && ask >= order.price) ||
-            (order.orderType === "SELL_STOP" && bid <= order.price);
+            (order.orderType === "BUY_LIMIT" &&
+              priceForChecks.ask <= order.price) ||
+            (order.orderType === "SELL_LIMIT" &&
+              priceForChecks.bid >= order.price) ||
+            (order.orderType === "BUY_STOP" &&
+              priceForChecks.ask >= order.price) ||
+            (order.orderType === "SELL_STOP" &&
+              priceForChecks.bid <= order.price);
 
           if (!hit) continue;
 
@@ -640,11 +832,9 @@ export class Engine {
             } catch (err) {
               console.error("[ENGINE] emit ORDER_EXECUTED failed", err);
             }
-          }
+          } catch (err) {
+            /* ===== EXECUTE FAILED ===== */
 
-          /* ===== EXECUTE FAILED ===== */
-
-          catch (err) {
             const reason =
               err && err.message ? err.message : "EXECUTION_FAILED";
 
@@ -686,7 +876,7 @@ export class Engine {
             } catch (emitErr) {
               console.error(
                 "[ENGINE] emit LIVE_PENDING_EXECUTE_FAILED failed",
-                emitErr
+                emitErr,
               );
             }
           }
@@ -700,9 +890,17 @@ export class Engine {
       for (const pos of account.positions.values()) {
         if (pos.symbol !== symbol) continue;
 
-        pos.updatePnL(bid, ask);
+        // compute per-account formatted price for PnL and checks
+        let formatted = { bid, ask };
+        try {
+          formatted = this.formatPrice(account, sym, bid, ask);
+        } catch (err) {
+          formatted = { bid, ask };
+        }
 
-        const currentPrice = pos.side === "BUY" ? bid : ask;
+        pos.updatePnL(formatted.bid, formatted.ask);
+
+        const currentPrice = pos.side === "BUY" ? formatted.ask : formatted.bid;
 
         try {
           engineEvents.emit("LIVE_POSITION", {
@@ -776,13 +974,20 @@ export class Engine {
     }
   }
 
-
   /* =========================
      CLOSE
   ========================== */
 
   closePositionInternal(account, pos, reason, sym) {
-    pos.updatePnL(sym.bid, sym.ask);
+    // use per-account formatted prices for PnL and close price
+    let formatted = { bid: sym.bid, ask: sym.ask };
+    try {
+      formatted = this.formatPrice(account, sym, sym.bid, sym.ask);
+    } catch (err) {
+      formatted = { bid: sym.bid, ask: sym.ask };
+    }
+
+    pos.updatePnL(formatted.bid, formatted.ask);
 
     account.positions.delete(pos.positionId);
 
@@ -796,7 +1001,7 @@ export class Engine {
       userId: account.userId,
       accountId: account.accountId,
       positionId: pos.positionId,
-      closePrice: pos.side === "BUY" ? sym.bid : sym.ask,
+      closePrice: pos.side === "BUY" ? formatted.bid : formatted.ask,
       realizedPnL: Number(pos.floatingPnL.toFixed(2)),
       reason,
       commissionCharged: pos.commission || 0,

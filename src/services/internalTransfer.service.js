@@ -1,17 +1,24 @@
-import mongoose from 'mongoose';
-import Account from '../models/Account.model.js';
-import AccountPlan from '../models/AccountPlan.model.js';
-import Transaction from '../models/Transaction.model.js';
+import mongoose from "mongoose";
+
+import Account from "../models/Account.model.js";
+import AccountPlan from "../models/AccountPlan.model.js";
+import Transaction from "../models/Transaction.model.js";
+import Trade from "../models/Trade.model.js";
+
+import EngineSync from "../trade-engine/EngineSync.js";
+
+/* =====================================================
+   HELPERS
+===================================================== */
 
 function isValidAmount(amount) {
-  if (typeof amount !== 'number' || Number.isNaN(amount)) return false;
+  if (typeof amount !== "number") return false;
   if (!Number.isFinite(amount)) return false;
   return true;
 }
 
 function hasMaxTwoDecimals(amount) {
-  const multiplied = Math.round(amount * 100);
-  return Math.abs(amount * 100 - multiplied) < 1e-9;
+  return Math.abs(amount * 100 - Math.round(amount * 100)) < 1e-9;
 }
 
 function getStartOfDay(date) {
@@ -26,16 +33,16 @@ function getEndOfDay(date) {
   return d;
 }
 
-async function enforceCooldown({
-  userId,
-  session,
-  cooldownSeconds
-}) {
-  const lastTransfer = await Transaction.findOne(
+/* =====================================================
+   RATE LIMIT HELPERS
+===================================================== */
+
+async function enforceCooldown({ userId, session, cooldownSeconds }) {
+  const last = await Transaction.findOne(
     {
       user: userId,
-      referenceType: 'INTERNAL_TRANSFER',
-      status: 'SUCCESS'
+      referenceType: "INTERNAL_TRANSFER",
+      status: "SUCCESS",
     },
     { createdAt: 1 }
   )
@@ -43,16 +50,14 @@ async function enforceCooldown({
     .session(session)
     .lean();
 
-  if (!lastTransfer) return;
+  if (!last) return;
 
-  const now = Date.now();
-  const last = new Date(lastTransfer.createdAt).getTime();
-  const diffSeconds = Math.floor((now - last) / 1000);
+  const diff = Math.floor(
+    (Date.now() - new Date(last.createdAt).getTime()) / 1000
+  );
 
-  if (diffSeconds < cooldownSeconds) {
-    throw new Error(
-      `Please wait ${cooldownSeconds - diffSeconds}s before next transfer`
-    );
+  if (diff < cooldownSeconds) {
+    throw new Error(`Please wait ${cooldownSeconds - diff}s before next transfer`);
   }
 }
 
@@ -61,124 +66,96 @@ async function enforceDailyLimits({
   amount,
   session,
   maxTransfersPerDay,
-  maxDailyAmount
+  maxDailyAmount,
 }) {
-  const startOfDay = getStartOfDay(new Date());
-  const endOfDay = getEndOfDay(new Date());
+  const start = getStartOfDay(new Date());
+  const end = getEndOfDay(new Date());
 
-  // Each transfer makes 2 transactions (OUT + IN)
-  // We'll count OUT only as 1 transfer
-  const todayTransferCount = await Transaction.countDocuments({
+  const count = await Transaction.countDocuments({
     user: userId,
-    type: 'INTERNAL_TRANSFER_OUT',
-    referenceType: 'INTERNAL_TRANSFER',
-    status: 'SUCCESS',
-    createdAt: { $gte: startOfDay, $lte: endOfDay }
+    type: "INTERNAL_TRANSFER_OUT",
+    referenceType: "INTERNAL_TRANSFER",
+    status: "SUCCESS",
+    createdAt: { $gte: start, $lte: end },
   }).session(session);
 
-  if (todayTransferCount >= maxTransfersPerDay) {
-    throw new Error(
-      `Daily transfer limit reached (${maxTransfersPerDay} transfers per day)`
-    );
+  if (count >= maxTransfersPerDay) {
+    throw new Error(`Daily transfer limit reached (${maxTransfersPerDay})`);
   }
 
-  // total amount per day (sum OUT)
   const agg = await Transaction.aggregate([
     {
       $match: {
         user: new mongoose.Types.ObjectId(String(userId)),
-        type: 'INTERNAL_TRANSFER_OUT',
-        referenceType: 'INTERNAL_TRANSFER',
-        status: 'SUCCESS',
-        createdAt: { $gte: startOfDay, $lte: endOfDay }
-      }
+        type: "INTERNAL_TRANSFER_OUT",
+        referenceType: "INTERNAL_TRANSFER",
+        status: "SUCCESS",
+        createdAt: { $gte: start, $lte: end },
+      },
     },
     {
-      $group: {
-        _id: null,
-        total: { $sum: '$amount' }
-      }
-    }
+      $group: { _id: null, total: { $sum: "$amount" } },
+    },
   ]).session(session);
 
-  const todayTotal = agg.length ? agg[0].total : 0;
+  const today = agg.length ? agg[0].total : 0;
 
-  if (todayTotal + amount > maxDailyAmount) {
-    throw new Error(
-      `Daily transfer amount limit exceeded (Max $${maxDailyAmount})`
-    );
+  if (today + amount > maxDailyAmount) {
+    throw new Error(`Daily amount limit exceeded ($${maxDailyAmount})`);
   }
 }
 
-/**
- * CREATE INTERNAL TRANSFER (NO SEPARATE MODEL)
- *
- * HISTORY STORAGE:
- * - 2 Transaction records will be created:
- *   1) INTERNAL_TRANSFER_OUT (fromAccount)
- *   2) INTERNAL_TRANSFER_IN  (toAccount)
- *
- * RESTRICTIONS:
- * - ownership check (same user)
- * - both active
- * - LIVE -> LIVE only
- * - from != to
- * - amount validation + min/max + 2 decimals
- * - sufficient balance
- * - strict block if toAccount.first_deposit === false (cannot bypass first deposit)
- * - mongoose transaction
- * - rate limits
- * - referral must NOT trigger here
- */
+/* =====================================================
+   MAIN SERVICE
+===================================================== */
+
 export async function createInternalTransferService({
   userId,
   fromAccount,
   toAccount,
   amount,
-  ipAddress
+  ipAddress,
 }) {
-  /* ---------------- BASIC VALIDATION ---------------- */
+  /* ================= BASIC VALIDATION ================= */
+
   if (!fromAccount || !toAccount || !amount) {
-    throw new Error('All fields are required');
+    throw new Error("All fields are required");
   }
 
   if (String(fromAccount) === String(toAccount)) {
-    throw new Error('From and To accounts must be different');
+    throw new Error("From and To accounts must be different");
   }
 
   if (!isValidAmount(amount)) {
-    throw new Error('Invalid transfer amount');
+    throw new Error("Invalid transfer amount");
   }
 
   if (amount <= 0) {
-    throw new Error('Transfer amount must be greater than 0');
+    throw new Error("Amount must be greater than 0");
   }
 
   if (!hasMaxTwoDecimals(amount)) {
-    throw new Error('Amount can have maximum 2 decimal places');
+    throw new Error("Max 2 decimal places allowed");
   }
 
-  const MIN_TRANSFER = 10;
-  const MAX_TRANSFER = 50000;
+  const MIN = 10;
+  const MAX = 50000;
 
-  if (amount < MIN_TRANSFER) {
-    throw new Error(`Minimum transfer amount is $${MIN_TRANSFER}`);
-  }
+  if (amount < MIN) throw new Error(`Minimum $${MIN}`);
+  if (amount > MAX) throw new Error(`Maximum $${MAX}`);
 
-  if (amount > MAX_TRANSFER) {
-    throw new Error(`Maximum transfer amount is $${MAX_TRANSFER}`);
-  }
+  /* ================= TRANSACTION ================= */
 
-  /* ---------------- TRANSACTION START ---------------- */
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
-    /* ---------------- RATE LIMITS ---------------- */
+    /* ================= RATE LIMIT ================= */
+
     await enforceCooldown({
       userId,
       session,
-      cooldownSeconds: 10
+      cooldownSeconds: 10,
     });
 
     await enforceDailyLimits({
@@ -186,127 +163,146 @@ export async function createInternalTransferService({
       amount,
       session,
       maxTransfersPerDay: 10,
-      maxDailyAmount: 100000
+      maxDailyAmount: 100000,
     });
 
-    /* ---------------- ACCOUNT VALIDATION ---------------- */
+    /* ================= ACCOUNT VALIDATION ================= */
+
     const [fromAcc, toAcc] = await Promise.all([
       Account.findOne({
         _id: fromAccount,
         user_id: userId,
-        status: 'active'
+        status: "active",
       }).session(session),
 
       Account.findOne({
         _id: toAccount,
         user_id: userId,
-        status: 'active'
-      }).session(session)
+        status: "active",
+      }).session(session),
     ]);
 
-    if (!fromAcc) {
-      throw new Error('From account not found or inactive');
-    }
-    if (!toAcc) {
-      throw new Error('To account not found or inactive');
+    if (!fromAcc) throw new Error("From account invalid");
+    if (!toAcc) throw new Error("To account invalid");
+
+    /* ================= LIVE → LIVE ================= */
+
+    if (fromAcc.account_type !== "live") {
+      throw new Error("Only LIVE accounts allowed");
     }
 
-    /* ---------------- LIVE -> LIVE ONLY ---------------- */
-    if (fromAcc.account_type !== 'live') {
-      throw new Error('Internal transfer allowed only from LIVE account');
-    }
-    if (toAcc.account_type !== 'live') {
-      throw new Error('Internal transfer allowed only to LIVE account');
+    if (toAcc.account_type !== "live") {
+      throw new Error("Only LIVE accounts allowed");
     }
 
-    /* ---------------- FIRST DEPOSIT BYPASS BLOCK (STRICT) ---------------- */
+    /* ================= OPEN TRADE BLOCK ================= */
+
+    const openTrades = await Trade.countDocuments({
+      accountId: fromAcc._id,
+      status: "OPEN",
+    }).session(session);
+
+    if (openTrades > 0) {
+      throw new Error(
+        "Transfer blocked: Close all open trades first"
+      );
+    }
+
+    /* ================= FIRST DEPOSIT ================= */
+
     if (toAcc.first_deposit === false) {
       const plan = await AccountPlan.findById(toAcc.account_plan_id)
         .session(session)
         .lean();
 
-      if (!plan) {
-        throw new Error('Account plan not found');
-      }
-
       throw new Error(
-        `Transfer not allowed. Please complete first deposit of $${plan.minDeposit} on the destination account`
+        `Complete first deposit of $${plan?.minDeposit || 0}`
       );
     }
 
-    /* ---------------- SUFFICIENT BALANCE ---------------- */
-    if (typeof fromAcc.balance !== 'number') {
-      throw new Error('Invalid account balance');
-    }
+    /* ================= BALANCE CHECK ================= */
 
     if (fromAcc.balance < amount) {
-      throw new Error('Insufficient balance in source account');
+      throw new Error("Insufficient balance");
     }
 
-    /* ---------------- CALCULATE NEW BALANCES ---------------- */
-    const fromNewBalance = fromAcc.balance - amount;
-    const toNewBalance = toAcc.balance + amount;
+    /* ================= UPDATE BALANCES ================= */
 
-    /* ---------------- UPDATE BALANCES ---------------- */
+    const fromNew = fromAcc.balance - amount;
+    const toNew = toAcc.balance + amount;
+
     await Promise.all([
       Account.updateOne(
         { _id: fromAcc._id },
-        { $set: { balance: fromNewBalance } },
+        { $set: { balance: fromNew } },
         { session }
       ),
+
       Account.updateOne(
         { _id: toAcc._id },
-        { $set: { balance: toNewBalance } },
+        { $set: { balance: toNew } },
         { session }
-      )
+      ),
     ]);
 
-    /* ---------------- CREATE REFERENCE ID (FOR LINKING BOTH ROWS) ---------------- */
-    const transferReferenceId = new mongoose.Types.ObjectId();
+    /* ================= TRANSACTION HISTORY ================= */
 
-    /* ---------------- DOUBLE ENTRY TRANSACTION HISTORY ---------------- */
+    const refId = new mongoose.Types.ObjectId();
+
     await Transaction.create(
-  [
-    {
-      user: userId,
-      account: fromAcc._id,
-      type: 'INTERNAL_TRANSFER_OUT',
-      amount: amount,
-      balanceAfter: fromNewBalance,
-      status: 'SUCCESS',
-      referenceType: 'INTERNAL_TRANSFER',
-      referenceId: transferReferenceId,
-      createdBy: userId,
-      remark: 'Internal transfer debit'
-    },
-    {
-      user: userId,
-      account: toAcc._id,
-      type: 'INTERNAL_TRANSFER_IN',
-      amount: amount,
-      balanceAfter: toNewBalance,
-      status: 'SUCCESS',
-      referenceType: 'INTERNAL_TRANSFER',
-      referenceId: transferReferenceId,
-      createdBy: userId,
-      remark: 'Internal transfer credit'
-    }
-  ],
-  { session, ordered: true }
-);
+      [
+        {
+          user: userId,
+          account: fromAcc._id,
+          type: "INTERNAL_TRANSFER_OUT",
+          amount,
+          balanceAfter: fromNew,
+          status: "SUCCESS",
+          referenceType: "INTERNAL_TRANSFER",
+          referenceId: refId,
+          createdBy: userId,
+          ipAddress,
+          remark: "Internal transfer debit",
+        },
 
+        {
+          user: userId,
+          account: toAcc._id,
+          type: "INTERNAL_TRANSFER_IN",
+          amount,
+          balanceAfter: toNew,
+          status: "SUCCESS",
+          referenceType: "INTERNAL_TRANSFER",
+          referenceId: refId,
+          createdBy: userId,
+          ipAddress,
+          remark: "Internal transfer credit",
+        },
+      ],
+      { session, ordered: true }
+    );
+
+    /* ================= COMMIT ================= */
 
     await session.commitTransaction();
     session.endSession();
 
+    /* ================= ENGINE SYNC ================= */
+
+    await EngineSync.onInternalTransfer(
+      String(fromAcc._id),
+      String(toAcc._id),
+      amount
+    );
+
     return {
       success: true,
-      referenceId: transferReferenceId,
+      referenceId: refId,
       fromAccount: fromAcc._id,
       toAccount: toAcc._id,
       amount,
-      fromBalance: fromNewBalance,
-      toBalance: toNewBalance
+      fromBalance: fromNew,
+      toBalance: toNew,
     };
   } catch (err) {
     await session.abortTransaction();
@@ -315,49 +311,38 @@ export async function createInternalTransferService({
   }
 }
 
-/**
- * GET USER INTERNAL TRANSFERS (PAGINATED)
- * We read from Transaction History only.
- */
+/* =====================================================
+   HISTORY
+===================================================== */
+
 export async function getUserInternalTransfersService({
   userId,
   page = 1,
-  limit = 10
+  limit = 10,
 }) {
   const safePage = Math.max(Number(page) || 1, 1);
   const safeLimit = Math.min(Math.max(Number(limit) || 10, 1), 50);
+
   const skip = (safePage - 1) * safeLimit;
 
   const filter = {
     user: userId,
-    referenceType: 'INTERNAL_TRANSFER',
-    status: 'SUCCESS',
-    type: { $in: ['INTERNAL_TRANSFER_OUT', 'INTERNAL_TRANSFER_IN'] }
+    referenceType: "INTERNAL_TRANSFER",
+    status: "SUCCESS",
+    type: {
+      $in: ["INTERNAL_TRANSFER_OUT", "INTERNAL_TRANSFER_IN"],
+    },
   };
 
   const [data, total] = await Promise.all([
-    Transaction.find(
-      filter,
-      {
-        user: 1,
-        account: 1,
-        type: 1,
-        amount: 1,
-        balanceAfter: 1,
-        status: 1,
-        referenceType: 1,
-        referenceId: 1,
-        remark: 1,
-        createdAt: 1
-      }
-    )
+    Transaction.find(filter)
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(safeLimit)
-      .populate('account', 'accountNo account_type status account_number')
+      .populate("account", "account_number account_type status")
       .lean(),
 
-    Transaction.countDocuments(filter)
+    Transaction.countDocuments(filter),
   ]);
 
   return {
@@ -366,7 +351,7 @@ export async function getUserInternalTransfersService({
       page: safePage,
       limit: safeLimit,
       total,
-      totalPages: Math.ceil(total / safeLimit)
-    }
+      totalPages: Math.ceil(total / safeLimit),
+    },
   };
 }

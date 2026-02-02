@@ -2,6 +2,9 @@ import Account from "../models/Account.model.js";
 import AccountPlan from "../models/AccountPlan.model.js";
 import AccountAuth from "../models/AccountAuth.model.js";
 import User from "../models/User.model.js";
+
+import EngineSync from "../trade-engine/EngineSync.js";
+
 import { sendAccountCreatedMail } from "../utils/mail.util.js";
 import { generateAccountNumber } from "../utils/accountNumber.util.js";
 import { generateStrongPassword } from "../utils/accountNumber.util.js";
@@ -9,38 +12,30 @@ import { hashPassword } from "../utils/hash.util.js";
 
 const DEMO_DEFAULT_BALANCE = 10000;
 
-/**
- * =====================================================
- * CREATE ACCOUNT (ACCOUNT + ACCOUNT AUTH)
- * =====================================================
- */
-export async function createAccount({
-  userId,
-  account_plan_id,
-  account_type,
-}) {
-  if (!userId) {
-    throw new Error("User not authenticated");
-  }
+/* =====================================================
+   CREATE ACCOUNT
+===================================================== */
+export async function createAccount({ userId, account_plan_id, account_type }) {
+  if (!userId) throw new Error("User not authenticated");
 
-  if (account_type !== "demo" && account_type !== "live") {
+  if (!["demo", "live"].includes(account_type)) {
     throw new Error("Invalid account type");
   }
 
-  // ================= PLAN =================
+  /* ================= PLAN ================= */
+
   const plan = await AccountPlan.findOne({
     _id: account_plan_id,
     isActive: true,
   }).lean();
 
-  if (!plan) {
-    throw new Error("Invalid or inactive account plan");
-  }
+  if (!plan) throw new Error("Invalid plan");
 
-  // ================= DEMO RULE =================
+  /* ================= DEMO ================= */
+
   if (account_type === "demo") {
     if (plan.is_demo_allowed === false) {
-      throw new Error("Demo account not allowed for this plan");
+      throw new Error("Demo not allowed");
     }
 
     const demoCount = await Account.countDocuments({
@@ -49,11 +44,12 @@ export async function createAccount({
     });
 
     if (demoCount >= 1) {
-      throw new Error("Only one DEMO account is allowed");
+      throw new Error("Only one demo account allowed");
     }
   }
 
-  // ================= LIVE RULE =================
+  /* ================= LIVE ================= */
+
   if (account_type === "live") {
     const liveCount = await Account.countDocuments({
       user_id: userId,
@@ -61,47 +57,43 @@ export async function createAccount({
     });
 
     if (liveCount >= 7) {
-      throw new Error("Maximum 7 LIVE accounts allowed");
+      throw new Error("Maximum 7 live accounts allowed");
     }
   }
 
-  // ================= LEVERAGE =================
+  /* ================= CONFIG ================= */
+
   const leverage =
     typeof plan.max_leverage === "number" && plan.max_leverage > 0
       ? plan.max_leverage
       : 1;
 
-  if (leverage <= 0) {
-    throw new Error("Invalid leverage configuration");
-  }
+  if (leverage <= 0) throw new Error("Invalid leverage");
 
-  // ================= BALANCE =================
   const balance = account_type === "demo" ? DEMO_DEFAULT_BALANCE : 0;
 
-  // ================= ACCOUNT NUMBER =================
   const accountNumber = generateAccountNumber();
 
-  // ================= PASSWORD =================
-  const tradePasswordPlain = generateStrongPassword(12);
-  const watchPasswordPlain = generateStrongPassword(12);
+  /* ================= PASSWORD ================= */
 
-  const tradePasswordHash = await hashPassword(tradePasswordPlain);
-  const watchPasswordHash = await hashPassword(watchPasswordPlain);
+  const tradePass = generateStrongPassword(12);
+  const watchPass = generateStrongPassword(12);
 
-  // ================= PLAN SNAPSHOT =================
-  const spreadType = plan.spread_type || "FLOATING";
-  const spreadPips = typeof plan.spreadPips === "number" ? plan.spreadPips : 0;
+  const tradeHash = await hashPassword(tradePass);
+  const watchHash = await hashPassword(watchPass);
+
+  /* ================= SNAPSHOT ================= */
+
   const commissionPerLot =
-    typeof plan.commission_per_lot === "number"
-      ? plan.commission_per_lot
-      : 0;
+    typeof plan.commission_per_lot === "number" ? plan.commission_per_lot : 0;
 
   const swapEnabled = !!plan.swap_enabled;
 
   const swapCharge =
     typeof plan.swap_charge === "number" ? plan.swap_charge : 0;
 
-  // ================= CREATE ACCOUNT =================
+  /* ================= CREATE ================= */
+
   const account = await Account.create({
     user_id: userId,
     account_plan_id: plan._id,
@@ -109,19 +101,19 @@ export async function createAccount({
     account_number: accountNumber,
     account_type,
 
-    // ===== PLAN SNAPSHOT =====
     plan_name: plan.name,
+
     leverage,
 
-    spread_type: spreadType,
-    spread_pips: spreadPips,
+    // ✅ SPREAD CONTROL
+    spread_enabled: true,
+    spread_pips: 0,
 
     commission_per_lot: commissionPerLot,
 
     swap_enabled: swapEnabled,
     swap_charge: swapCharge,
 
-    // ===== FINANCIALS =====
     balance,
     equity: balance,
 
@@ -130,13 +122,14 @@ export async function createAccount({
     status: "active",
   });
 
-  // ================= CREATE ACCOUNT AUTH =================
+  /* ================= AUTH ================= */
+
   await AccountAuth.create({
     account_id: account._id,
     account_number: account.account_number,
 
-    trade_password_hash: tradePasswordHash,
-    watch_password_hash: watchPasswordHash,
+    trade_password_hash: tradeHash,
+    watch_password_hash: watchHash,
 
     login_attempts: 0,
     is_locked: false,
@@ -144,7 +137,12 @@ export async function createAccount({
     credentials_created_at: new Date(),
   });
 
-  // ================= SEND ACCOUNT EMAIL =================
+  /* ================= ENGINE SYNC ================= */
+
+  await EngineSync.onAccountCreated(account._id);
+
+  /* ================= MAIL ================= */
+
   const user = await User.findById(userId, { email: 1 }).lean();
 
   if (user?.email) {
@@ -153,14 +151,16 @@ export async function createAccount({
       accountNumber: account.account_number,
       accountType: account.account_type,
       planName: account.plan_name,
-      tradePassword: tradePasswordPlain,
-      watchPassword: watchPasswordPlain,
+      tradePassword: tradePass,
+      watchPassword: watchPass,
     }).catch(() => {});
   }
 
-  // ================= RETURN =================
+  /* ================= RETURN ================= */
+
   return {
     id: account._id,
+
     account_number: account.account_number,
     account_type: account.account_type,
     plan_name: account.plan_name,
@@ -169,28 +169,23 @@ export async function createAccount({
     currency: account.currency,
     leverage: account.leverage,
 
-    spread_type: account.spread_type,
-    spread_pips: account.spread_pips,
+    spread_enabled: account.spread_enabled,
+
     commission_per_lot: account.commission_per_lot,
 
     swap_enabled: account.swap_enabled,
     swap_charge: account.swap_charge,
 
-    // ⚠️ Only once
-    trade_password: tradePasswordPlain,
-    watch_password: watchPasswordPlain,
+    trade_password: tradePass,
+    watch_password: watchPass,
   };
 }
 
-/**
- * =====================================================
- * GET USER ACCOUNTS
- * =====================================================
- */
+/* =====================================================
+   GET USER ACCOUNTS
+===================================================== */
 export async function getUserAccounts(userId) {
-  if (!userId) {
-    throw new Error("User not authenticated");
-  }
+  if (!userId) throw new Error("User not authenticated");
 
   return Account.find(
     { user_id: userId },
@@ -199,27 +194,26 @@ export async function getUserAccounts(userId) {
       account_type: 1,
       plan_name: 1,
       leverage: 1,
-      spread_type: 1,
+
+      spread_enabled: 1,
+
       balance: 1,
       equity: 1,
       currency: 1,
       status: 1,
+
       createdAt: 1,
-    }
+    },
   )
     .sort({ createdAt: -1 })
     .lean();
 }
 
-/**
- * =====================================================
- * GET SINGLE ACCOUNT (USER SAFE)
- * =====================================================
- */
+/* =====================================================
+   GET ACCOUNT DETAIL
+===================================================== */
 export async function getUserAccountDetail({ userId, accountId }) {
-  if (!userId || !accountId) {
-    throw new Error("Invalid request");
-  }
+  if (!userId || !accountId) throw new Error("Invalid request");
 
   const account = await Account.findOne(
     { _id: accountId, user_id: userId },
@@ -227,18 +221,24 @@ export async function getUserAccountDetail({ userId, accountId }) {
       account_number: 1,
       account_type: 1,
       plan_name: 1,
+
       leverage: 1,
-      spread_type: 1,
-      spread_pips: 1,
+
+      spread_enabled: 1,
+
       commission_per_lot: 1,
+
       swap_enabled: 1,
+
       balance: 1,
       equity: 1,
       currency: 1,
+
       status: 1,
       first_deposit: 1,
+
       createdAt: 1,
-    }
+    },
   ).lean();
 
   if (!account) {
@@ -250,11 +250,9 @@ export async function getUserAccountDetail({ userId, accountId }) {
   return account;
 }
 
-/**
- * =====================================================
- * RESET DEMO ACCOUNT
- * =====================================================
- */
+/* =====================================================
+   RESET DEMO
+===================================================== */
 export async function resetDemoAccount({ userId, accountId }) {
   const account = await Account.findOne({
     _id: accountId,
@@ -264,7 +262,7 @@ export async function resetDemoAccount({ userId, accountId }) {
   });
 
   if (!account) {
-    const err = new Error("Demo account not found or inactive");
+    const err = new Error("Demo account not found");
     err.statusCode = 400;
     throw err;
   }
@@ -273,22 +271,23 @@ export async function resetDemoAccount({ userId, accountId }) {
   account.equity = DEMO_DEFAULT_BALANCE;
 
   await account.save();
+
+  // ✅ ENGINE UPDATE
+  await EngineSync.syncAccount(account._id);
+
   return account;
 }
-/**
- * =====================================================
- * Account leverage setting user service
- * =====================================================
- */
+
+/* =====================================================
+   SET LEVERAGE
+===================================================== */
 export async function setAccountLeverage({ userId, accountId, leverage }) {
-  if (!userId || !accountId) {
-    throw new Error("Invalid request");
-  }
+  if (!userId || !accountId) throw new Error("Invalid request");
 
   const account = await Account.findOne({
     _id: accountId,
     user_id: userId,
-    status: "active"
+    status: "active",
   });
 
   if (!account) {
@@ -300,27 +299,25 @@ export async function setAccountLeverage({ userId, accountId, leverage }) {
   const plan = await AccountPlan.findById(account.account_plan_id).lean();
 
   if (!plan || !plan.isActive) {
-    throw new Error("Account plan not active");
+    throw new Error("Plan not active");
   }
 
-  // PLAN MAX LEVERAGE CHECK
-  // max_leverage = 0 means unlimited
   if (plan.max_leverage > 0 && leverage > plan.max_leverage) {
-    throw new Error(
-      `Maximum allowed leverage for this plan is ${plan.max_leverage}`
-    );
+    throw new Error(`Max leverage: ${plan.max_leverage}`);
   }
 
-  if (leverage < 1) {
-    throw new Error("Leverage must be at least 1");
-  }
+  if (leverage < 1) throw new Error("Invalid leverage");
 
   account.leverage = leverage;
+
   await account.save();
+
+  // ✅ ENGINE UPDATE
+  await EngineSync.syncAccount(account._id);
 
   return {
     account_id: account._id,
     account_number: account.account_number,
-    leverage: account.leverage
+    leverage: account.leverage,
   };
 }

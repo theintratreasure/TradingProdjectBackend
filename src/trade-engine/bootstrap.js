@@ -19,8 +19,13 @@ export async function bootstrapEngine({ accounts, symbols }) {
       leverage: acc.leverage,
       userId: String(acc._id), // required
       lastIp: acc.lastIp || "SYSTEM",
+
+      // charges
       commission_per_lot: Number(acc.commission_per_lot) || 0,
       swap_charge: Number(acc.swap_charge) || 0,
+
+      // spread control (account-level ON / OFF)
+      spread_enabled: Boolean(acc.spread_enabled),
     });
   }
 
@@ -32,6 +37,14 @@ export async function bootstrapEngine({ accounts, symbols }) {
     tradeEngine.loadSymbol(sym.code, {
       contractSize: sym.contractSize,
       maxLeverage: sym.maxLeverage || 2000,
+
+      // pricing rules (from Instrument)
+      spread: Number(sym.spread) || 0,
+      tickSize: Number(sym.tickSize) || 0,
+      pricePrecision:
+        typeof sym.pricePrecision === "number"
+          ? sym.pricePrecision
+          : undefined,
     });
   }
 

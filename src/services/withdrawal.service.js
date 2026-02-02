@@ -4,6 +4,7 @@ import Account from "../models/Account.model.js";
 import Transaction from "../models/Transaction.model.js";
 import User from "../models/User.model.js";
 import Trade from "../models/Trade.model.js";
+import EngineSync from "../trade-engine/EngineSync.js";
 
 /* -------------------- HELPERS -------------------- */
 
@@ -12,7 +13,8 @@ const parsePagination = (query) => {
   const limitRaw = Number(query.limit);
 
   const page = Number.isFinite(pageRaw) && pageRaw > 0 ? pageRaw : 1;
-  const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 100) : 10;
+  const limit =
+    Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 100) : 10;
 
   const skip = (page - 1) * limit;
 
@@ -197,7 +199,7 @@ export const createWithdrawal = async ({ userId, ipAddress, payload }) => {
 
       if (openTrade) {
         throw new Error(
-          "Please close your all trade before processing any withdrawal"
+          "Please close your all trade before processing any withdrawal",
         );
       }
 
@@ -205,9 +207,7 @@ export const createWithdrawal = async ({ userId, ipAddress, payload }) => {
          BALANCE CHECK
       ========================== */
       const holdBalance =
-        typeof account.hold_balance === "number"
-          ? account.hold_balance
-          : 0;
+        typeof account.hold_balance === "number" ? account.hold_balance : 0;
 
       if (amount > account.balance) {
         throw new Error("Insufficient balance");
@@ -227,6 +227,19 @@ export const createWithdrawal = async ({ userId, ipAddress, payload }) => {
       account.equity = account.balance;
 
       await account.save({ session });
+
+      // Sync engine: update balance in trade engine (best-effort, log on failure)
+      try {
+        await EngineSync.updateBalance(
+          String(account._id),
+          Number(account.balance),
+        );
+      } catch (e) {
+        console.error(
+          "[ENGINE_SYNC] updateBalance failed (createWithdrawal)",
+          e && e.message ? e.message : e,
+        );
+      }
 
       /* =========================
          CREATE WITHDRAWAL
@@ -296,7 +309,6 @@ export const createWithdrawal = async ({ userId, ipAddress, payload }) => {
   }
 };
 
-
 /* -------------------- USER: LIST WITHDRAWALS -------------------- */
 
 export const listUserWithdrawals = async ({ userId, query }) => {
@@ -352,7 +364,10 @@ export const listAdminWithdrawals = async ({ query }) => {
   const [items, total] = await Promise.all([
     Withdrawal.find(filter)
       .populate("user", "name email")
-      .populate("account", "account_number account_type balance hold_balance status")
+      .populate(
+        "account",
+        "account_number account_type balance hold_balance status",
+      )
       .sort(sort)
       .skip(skip)
       .limit(limit)
@@ -392,7 +407,8 @@ export const adminApproveWithdrawal = async ({ adminId, withdrawalId }) => {
     let updatedWithdrawal = null;
 
     await session.withTransaction(async () => {
-      const withdrawal = await Withdrawal.findById(withdrawalId).session(session);
+      const withdrawal =
+        await Withdrawal.findById(withdrawalId).session(session);
 
       if (!withdrawal) {
         throw new Error("Withdrawal not found");
@@ -415,7 +431,8 @@ export const adminApproveWithdrawal = async ({ adminId, withdrawalId }) => {
         throw new Error("Account is not active");
       }
 
-      const holdBalance = typeof account.hold_balance === "number" ? account.hold_balance : 0;
+      const holdBalance =
+        typeof account.hold_balance === "number" ? account.hold_balance : 0;
 
       if (withdrawal.amount > holdBalance) {
         throw new Error("Hold balance mismatch. Cannot approve withdrawal");
@@ -431,6 +448,19 @@ export const adminApproveWithdrawal = async ({ adminId, withdrawalId }) => {
       account.equity = account.balance;
 
       await account.save({ session });
+
+      // Sync engine: update balance (best-effort)
+      try {
+        await EngineSync.updateBalance(
+          String(account._id),
+          Number(account.balance),
+        );
+      } catch (e) {
+        console.error(
+          "[ENGINE_SYNC] updateBalance failed (adminApproveWithdrawal)",
+          e && e.message ? e.message : e,
+        );
+      }
 
       withdrawal.status = "COMPLETED";
       withdrawal.actionBy = adminId;
@@ -480,7 +510,11 @@ export const adminApproveWithdrawal = async ({ adminId, withdrawalId }) => {
  * ✅ REFUND BALANCE BACK
  * ✅ REMOVE FROM HOLD_BALANCE
  */
-export const adminRejectWithdrawal = async ({ adminId, withdrawalId, rejectionReason }) => {
+export const adminRejectWithdrawal = async ({
+  adminId,
+  withdrawalId,
+  rejectionReason,
+}) => {
   const session = await mongoose.startSession();
 
   try {
@@ -496,7 +530,8 @@ export const adminRejectWithdrawal = async ({ adminId, withdrawalId, rejectionRe
     let updatedWithdrawal = null;
 
     await session.withTransaction(async () => {
-      const withdrawal = await Withdrawal.findById(withdrawalId).session(session);
+      const withdrawal =
+        await Withdrawal.findById(withdrawalId).session(session);
 
       if (!withdrawal) {
         throw new Error("Withdrawal not found");
@@ -519,7 +554,8 @@ export const adminRejectWithdrawal = async ({ adminId, withdrawalId, rejectionRe
         throw new Error("Account is not active");
       }
 
-      const holdBalance = typeof account.hold_balance === "number" ? account.hold_balance : 0;
+      const holdBalance =
+        typeof account.hold_balance === "number" ? account.hold_balance : 0;
 
       if (withdrawal.amount > holdBalance) {
         throw new Error("Hold balance mismatch. Cannot reject withdrawal");
@@ -536,6 +572,19 @@ export const adminRejectWithdrawal = async ({ adminId, withdrawalId, rejectionRe
       account.equity = account.balance;
 
       await account.save({ session });
+
+      // Sync engine: update balance (best-effort)
+      try {
+        await EngineSync.updateBalance(
+          String(account._id),
+          Number(account.balance),
+        );
+      } catch (e) {
+        console.error(
+          "[ENGINE_SYNC] updateBalance failed (adminRejectWithdrawal)",
+          e && e.message ? e.message : e,
+        );
+      }
 
       withdrawal.status = "REJECTED";
       withdrawal.rejectionReason = reason;

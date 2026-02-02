@@ -1,4 +1,11 @@
 // ws/alltick.manager.js
+// Full file with aggressive, actionable debug to determine exactly why spread isn't applied.
+// Logs are throttled to avoid console spam but by default are very verbose.
+// Set env:
+//   ALLTICK_DEBUG=1      -> verbose per-client logs (helpful during troubleshooting)
+//   ALLTICK_DEBUG_THROTTLE_MS=1000 -> throttle per-symbol summary (ms)
+// Keep this single file; paste over your existing file.
+
 import WebSocket from "ws";
 import EventEmitter from "events";
 import { v4 as uuidv4 } from "uuid";
@@ -19,6 +26,10 @@ const STOCK_URL = `${process.env.ALLTICK_STOCK_WS_URL}?token=${ALLTICK_TOKEN}`;
 
 const REDIS_URL = process.env.REDIS_URL || "redis://127.0.0.1:6379";
 const REDIS_CHANNEL = "engine:events";
+
+// Debug flags
+const DBG_VERBOSE = String(process.env.ALLTICK_DEBUG || "0") === "1" || String(process.env.ALLTICK_DEBUG || "0") === "true";
+const LOG_THROTTLE_MS = Number(process.env.ALLTICK_DEBUG_THROTTLE_MS || 1500);
 
 // ========================
 // Redis pub/sub
@@ -48,11 +59,102 @@ const normalizeSymbol = (v) =>
 const makeKey = (market, symbol) =>
   `${normalizeMarket(market)}:${normalizeSymbol(symbol)}`;
 
-const DBG = (...args) => {
-  try {
-    // console.debug.apply(console, ["[ALLTICK-MGR]", ...args]);
-  } catch {}
+const safeNum = (v) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : NaN;
 };
+
+// Lightweight DBG functions controlled by env
+function DBG(...args) {
+  if (DBG_VERBOSE) console.debug("[ALLTICK-MGR][DBG]", ...args);
+}
+function INFO(...args) {
+  console.info("[ALLTICK-MGR]", ...args);
+}
+function WARN(...args) {
+  console.warn("[ALLTICK-MGR]", ...args);
+}
+function ERROR(...args) {
+  console.error("[ALLTICK-MGR]", ...args);
+}
+
+// throttled per-symbol summary logging (prevents flood but gives clear status)
+const lastTickLog = new Map(); // symbol -> timestamp
+function shouldLogForSymbol(symbol) {
+  try {
+    const last = lastTickLog.get(symbol) || 0;
+    const now = Date.now();
+    if (now - last > LOG_THROTTLE_MS) {
+      lastTickLog.set(symbol, now);
+      return true;
+    }
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+// per-client per-symbol small throttle for very verbose logs
+const clientSymbolLogTs = new Map(); // `${clientId}:${symbol}` -> timestamp
+function shouldLogClientSymbol(clientId, symbol) {
+  try {
+    const key = `${clientId}:${symbol}`;
+    const last = clientSymbolLogTs.get(key) || 0;
+    const now = Date.now();
+    if (now - last > LOG_THROTTLE_MS) {
+      clientSymbolLogTs.set(key, now);
+      return true;
+    }
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+// rounding helpers: bids should not round up, asks should not round down
+function applyTickAndPrecision(value, tick, prec, isBid) {
+  if (typeof value !== "number" || Number.isNaN(value)) return value;
+  let v = value;
+  if (tick > 0) {
+    if (isBid) v = Math.floor(v / tick) * tick; // bids down
+    else v = Math.ceil(v / tick) * tick; // asks up
+  }
+  if (typeof prec === "number") v = Number(v.toFixed(prec));
+  return v;
+}
+
+// find symbol in engine with loose matching (case / key normalization)
+function findSymbolInEngine(symbol) {
+  try {
+    if (!tradeEngine || !tradeEngine.symbols) return null;
+    if (tradeEngine.symbols.has(symbol)) return tradeEngine.symbols.get(symbol);
+    for (const [k, v] of tradeEngine.symbols.entries()) {
+      if (normalizeSymbol(k) === symbol) return v;
+    }
+  } catch (err) {
+    DBG("findSymbolInEngine error", err && err.message ? err.message : err);
+  }
+  return null;
+}
+
+// attempt to load account into engine memory (subscribe-time)
+// only works if tradeEngine exposes loadAccount(accountId) async function
+async function ensureEngineAccount(accountId) {
+  if (!accountId || !tradeEngine) return null;
+  let acc = tradeEngine.accounts && tradeEngine.accounts.get(accountId);
+  if (acc) return acc;
+  if (typeof tradeEngine.loadAccount === "function") {
+    try {
+      acc = await tradeEngine.loadAccount(accountId);
+      INFO("ensureEngineAccount: loaded account into engine", accountId, !!acc ? "OK" : "FAILED");
+      return acc;
+    } catch (err) {
+      DBG("ensureEngineAccount loadAccount threw", err && err.message ? err.message : err);
+      return null;
+    }
+  }
+  return null;
+}
 
 // ========================
 // AllTick WS Manager
@@ -85,7 +187,7 @@ class AlltickWS extends EventEmitter {
 
   connect() {
     if (!ALLTICK_TOKEN) {
-      console.error(`[${this.marketName}] ALLTICK_API_KEY missing`);
+      ERROR(`[${this.marketName}] ALLTICK_API_KEY missing`);
       return;
     }
 
@@ -100,7 +202,7 @@ class AlltickWS extends EventEmitter {
       } catch {}
     }
 
-    console.log(`[${this.marketName}] Connecting to AllTick...`);
+    INFO(`[${this.marketName}] Connecting to AllTick...`);
 
     this.client = new WebSocket(this.url, { handshakeTimeout: 10000 });
 
@@ -113,7 +215,7 @@ class AlltickWS extends EventEmitter {
         this.reconnectTimer = null;
       }
 
-      console.log(`[${this.marketName}] Connected to AllTick WS`);
+      INFO(`[${this.marketName}] Connected to AllTick WS`);
       this.emit("ready");
       this.startHeartbeat();
       this.restoreSubscriptions();
@@ -141,21 +243,18 @@ class AlltickWS extends EventEmitter {
 
         this.emit("raw", json);
       } catch (err) {
-        console.error(`[${this.marketName}] Invalid JSON`, err);
+        ERROR(`[${this.marketName}] Invalid JSON`, err && err.message ? err.message : err);
       }
     });
 
     this.client.on("close", (code, reason) => {
       const reasonStr = reason ? reason.toString() : "";
-      console.warn(`[${this.marketName}] WS Closed`, code, reasonStr);
+      WARN(`[${this.marketName}] WS Closed`, code, reasonStr);
       this.cleanupAndReconnect(code, reasonStr);
     });
 
     this.client.on("error", (err) => {
-      console.error(
-        `[${this.marketName}] WS Error`,
-        err && err.message ? err.message : err,
-      );
+      ERROR(`[${this.marketName}] WS Error`, err && err.message ? err.message : err);
       this.cleanupAndReconnect();
     });
   }
@@ -178,7 +277,7 @@ class AlltickWS extends EventEmitter {
     this.stopHeartbeat();
 
     if (this.manualClose) {
-      console.log(`[${this.marketName}] manual close, not reconnecting`);
+      INFO(`[${this.marketName}] manual close, not reconnecting`);
       return;
     }
 
@@ -191,7 +290,7 @@ class AlltickWS extends EventEmitter {
     this.reconnectAttempts += 1;
     const delay = Math.min(5000 * this.reconnectAttempts, 60000);
 
-    console.log(`[${this.marketName}] Reconnecting in ${delay}ms`);
+    INFO(`[${this.marketName}] Reconnecting in ${delay}ms`);
 
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
@@ -215,10 +314,7 @@ class AlltickWS extends EventEmitter {
       try {
         this.client.send(JSON.stringify(payload));
       } catch (err) {
-        console.error(
-          `[${this.marketName}] Heartbeat send failed`,
-          err && err.message ? err.message : err,
-        );
+        ERROR(`[${this.marketName}] Heartbeat send failed`, err && err.message ? err.message : err);
         try {
           this.client.terminate();
         } catch {}
@@ -275,10 +371,7 @@ class AlltickWS extends EventEmitter {
     try {
       this.client.send(JSON.stringify(payload));
     } catch (err) {
-      console.error(
-        `[${this.marketName}] pushSubscription send failed`,
-        err && err.message ? err.message : err,
-      );
+      ERROR(`[${this.marketName}] pushSubscription send failed`, err && err.message ? err.message : err);
     }
   }
 
@@ -334,14 +427,12 @@ export function removeClient(id) {
     const set = accountIdMap.get(ws.accountId);
     if (set) {
       set.delete(id);
-      DBG(
-        "removed client from account map",
-        ws.accountId,
-        "remaining:",
-        set.size,
-      );
+      DBG("removed client from account map", ws.accountId, "remaining:", set.size);
       if (set.size === 0) accountIdMap.delete(ws.accountId);
     }
+  }
+  if (ws.engineAccount) {
+    ws.engineAccount = null;
   }
   clientSubscriptions.delete(id);
   wsClients.delete(id);
@@ -350,6 +441,10 @@ export function removeClient(id) {
 
 // ========================
 // BROADCAST ORDERBOOK (market route only)
+// - Applies per-account+per-symbol spread/tick/precision only for those
+//   clients who are identified (or provided accountId via subscribe) and have spread_enabled != false.
+// - Others receive raw AllTick data.
+// Detailed debug reasons are logged for any client that didn't get spread.
 // ========================
 function broadcastData(market, data) {
   const raw =
@@ -363,25 +458,149 @@ function broadcastData(market, data) {
   if (!symbol) return;
 
   const key = makeKey(market, symbol);
-  const msg = JSON.stringify({ type: "orderbook", market, data });
 
-  DBG(
-    "broadcast orderbook ->",
-    market,
-    symbol,
-    "clients:",
-    Array.from(wsClients.keys()).length,
-  );
+  const bestBidRaw = data?.bids?.[0]?.price;
+  const bestAskRaw = data?.asks?.[0]?.price;
 
+  const bestBid = safeNum(bestBidRaw);
+  const bestAsk = safeNum(bestAskRaw);
+
+  DBG("broadcast orderbook ->", market, symbol, "clients:", wsClients.size);
+
+  let appliedCount = 0;
+  let rawCount = 0;
+
+  // iterate clients and send either raw or adjusted per-account feed
   for (const [id, ws] of wsClients.entries()) {
     if (!ws || ws.readyState !== WebSocket.OPEN) continue;
     if (!ws.routes || !ws.routes.has("market")) continue;
     const subs = clientSubscriptions.get(id);
     if (!subs || !subs.has(key)) continue;
+
     try {
+      // default: raw data (clone so we don't mutate original)
+      let out = JSON.parse(JSON.stringify(data));
+
+      // If client provided accountId via subscribe or identify earlier,
+      // then adjust top-of-book prices per account+symbol rules.
+      const acc = ws.engineAccount || null;
+
+      // background lazy load: try to load if accountId present but engineAccount missing
+      if (!acc && ws.accountId && typeof tradeEngine?.loadAccount === "function") {
+        // don't await here, load in background and it will affect future ticks
+        tradeEngine.loadAccount(ws.accountId).then((loaded) => {
+          if (loaded) {
+            DBG("lazy-loaded account for client", id, ws.accountId);
+            ws.engineAccount = loaded;
+          }
+        }).catch(() => {});
+      }
+
+      let appliedThisClient = false;
+      let skipReason = null;
+
+      if (!Number.isFinite(bestBid) || !Number.isFinite(bestAsk)) {
+        skipReason = { reason: "bad_prices", bestBidRaw, bestAskRaw };
+      } else if (!acc) {
+        skipReason = { reason: "no_account_attached", clientId: id, accountId: ws.accountId || null };
+      } else if (acc.spread_enabled === false) {
+        skipReason = { reason: "spread_disabled_on_account", accountId: ws.accountId };
+      } else {
+        // try to fetch symbol object from engine
+        const sym = findSymbolInEngine(symbol);
+        if (!sym) {
+          skipReason = { reason: "symbol_missing_in_engine", symbol, engineSymbolCount: tradeEngine.symbols?.size ?? 0 };
+        } else {
+          // try engine.formatPrice (if exists)
+          let formatted = null;
+          if (typeof tradeEngine.formatPrice === "function") {
+            try {
+              const maybe = tradeEngine.formatPrice(acc, sym, bestBid, bestAsk);
+              if (maybe && typeof maybe.bid === "number" && typeof maybe.ask === "number" && Number.isFinite(maybe.bid) && Number.isFinite(maybe.ask)) {
+                formatted = { bid: maybe.bid, ask: maybe.ask, src: "engine.formatPrice" };
+              } else {
+                DBG("formatPrice returned invalid structure", symbol, maybe);
+              }
+            } catch (err) {
+              DBG("formatPrice threw", symbol, err && err.message ? err.message : err);
+            }
+          }
+
+          // fallback simple formatting
+          if (!formatted) {
+            const spread = typeof sym.spread === "number" ? sym.spread : 0;
+            const tick = typeof sym.tickSize === "number" ? sym.tickSize : 0;
+            const prec = typeof sym.pricePrecision === "number" ? sym.pricePrecision : undefined;
+
+            let pbid = bestBid;
+            let pask = bestAsk;
+
+            if (spread > 0) {
+              const half = spread / 2;
+              pbid = pbid - half;
+              pask = pask + half;
+            }
+
+            // enforce tick & precision: bid down, ask up
+            pbid = applyTickAndPrecision(pbid, tick, prec, true);
+            pask = applyTickAndPrecision(pask, tick, prec, false);
+
+            formatted = { bid: pbid, ask: pask, src: "fallback" };
+          }
+
+          // finally validate formatted
+          if (
+            formatted &&
+            typeof formatted.bid === "number" &&
+            typeof formatted.ask === "number" &&
+            Number.isFinite(formatted.bid) &&
+            Number.isFinite(formatted.ask)
+          ) {
+            // replace top-of-book in out clone
+            if (out.bids && out.bids[0]) out.bids[0].price = formatted.bid;
+            if (out.asks && out.asks[0]) out.asks[0].price = formatted.ask;
+            appliedThisClient = true;
+            // verbose per-client log if enabled
+            if (DBG_VERBOSE && shouldLogClientSymbol(id, symbol)) {
+              INFO(`client ${id} -> spread applied for ${symbol} (account=${ws.accountId}) src=${formatted.src} bid:${bestBidRaw}→${formatted.bid} ask:${bestAskRaw}→${formatted.ask}`);
+            }
+          } else {
+            skipReason = { reason: "formatted_invalid", symbol, formatted };
+          }
+        }
+      }
+
+      // send message
+      const msg = JSON.stringify({ type: "orderbook", market, data: out });
       ws.send(msg);
+
+      if (appliedThisClient) appliedCount++;
+      else {
+        rawCount++;
+        // If verbose mode on, log reason for not applying (throttled)
+        if (DBG_VERBOSE && shouldLogClientSymbol(id, symbol)) {
+          INFO(`client ${id} -> spread NOT applied for ${symbol}`, skipReason || { reason: "unknown" });
+        }
+      }
     } catch (err) {
-      console.error("[WS SEND ERROR] orderbook ->", err);
+      ERROR("[WS SEND ERROR] orderbook ->", err && err.message ? err.message : err);
+    }
+  } // end clients loop
+
+  // summary log (throttled)
+  if (shouldLogForSymbol(symbol)) {
+    INFO(`tick ${symbol} feed -> bestBid=${bestBidRaw} bestAsk=${bestAskRaw} applied=${appliedCount} raw=${rawCount} engineSymbols=${tradeEngine.symbols?.size ?? 0} engineAccounts=${tradeEngine.accounts?.size ?? 0}`);
+    // If appliedCount === 0, provide extra hints immediately (helpful root-cause)
+    if (appliedCount === 0) {
+      // Common reasons: symbol missing, accounts missing, spread disabled, bad prices
+      const symExists = !!findSymbolInEngine(symbol);
+      INFO("tick analysis hint:", {
+        symbol,
+        symExists,
+        symLoaded: symExists ? "yes" : "no",
+        accountCount: tradeEngine.accounts?.size ?? 0,
+        recommend: symExists ? "check account.spread_enabled or formatPrice" : "load symbols into tradeEngine at bootstrap (tradeEngine.symbols)"
+      });
     }
   }
 }
@@ -398,7 +617,6 @@ function feedEnginePrice(data) {
     data?.instrument_code;
 
   const normalized = normalizeSymbol(raw);
-  // do not strip stable suffixes here; keep same format engine expects (e.g. BTCUSDT)
   const symbol = normalized.startsWith("FX")
     ? normalized.replace(/^FX/, "")
     : normalized;
@@ -406,15 +624,19 @@ function feedEnginePrice(data) {
   const bestBid = data?.bids?.[0]?.price;
   const bestAsk = data?.asks?.[0]?.price;
 
-  const bid = Number(bestBid);
-  const ask = Number(bestAsk);
+  const bid = safeNum(bestBid);
+  const ask = safeNum(bestAsk);
 
   DBG("onTick feed ->", symbol, "bid", bid, "ask", ask);
 
   try {
-    tradeEngine.onTick(symbol, bid, ask);
+    if (typeof tradeEngine.onTick === "function") {
+      tradeEngine.onTick(symbol, bid, ask);
+    } else {
+      DBG("tradeEngine.onTick missing");
+    }
   } catch (err) {
-    console.error("[ENGINE] onTick error", err);
+    ERROR("[ENGINE] onTick error", err && err.message ? err.message : err);
   }
 }
 
@@ -438,11 +660,10 @@ wsStock.on("data", (d) => {
 function publishEngineEvent(eventType, payload) {
   const wrapper = JSON.stringify({ eventType, payload, ts: Date.now() });
   redisPub.publish(REDIS_CHANNEL, wrapper).catch((err) => {
-    // console.error("[ALLTICK-MGR][REDIS] publish error", err);
+    DBG("[ALLTICK-MGR][REDIS] publish error", err && err.message ? err.message : err);
   });
 }
 
-// publish ALL relevant engineEvents so other workers get them
 const forwardableEvents = [
   "LIVE_ACCOUNT",
   "LIVE_POSITION",
@@ -456,15 +677,10 @@ const forwardableEvents = [
 forwardableEvents.forEach((ev) => {
   engineEvents.on(ev, (payload) => {
     try {
-      DBG(
-        "engineEvents",
-        ev,
-        "->",
-        payload?.accountId ?? payload?.orderId ?? "?",
-      );
+      DBG("engineEvents", ev, "->", payload?.accountId ?? payload?.orderId ?? "?");
       publishEngineEvent(ev, payload);
     } catch (err) {
-      console.error(`[ENGINE] publish ${ev} error`, err);
+      ERROR(`[ENGINE] publish ${ev} error`, err && err.message ? err.message : err);
     }
   });
 });
@@ -478,20 +694,15 @@ redisSub.on("message", (channel, message) => {
   try {
     obj = JSON.parse(message);
   } catch (err) {
-    console.error("[ALLTICK-MGR][REDIS] invalid message", err);
+    ERROR("[ALLTICK-MGR][REDIS] invalid message", err && err.message ? err.message : err);
     return;
   }
 
   const { eventType, payload } = obj;
   if (!eventType || !payload) return;
 
-  DBG(
-    "redisSub message ->",
-    eventType,
-    payload?.accountId ?? payload?.orderId ?? null,
-  );
+  DBG("redisSub message ->", eventType, payload?.accountId ?? payload?.orderId ?? null);
 
-  // account update
   if (eventType === "LIVE_ACCOUNT") {
     const s = accountIdMap.get(String(payload.accountId));
     if (!s || s.size === 0) return;
@@ -505,16 +716,13 @@ redisSub.on("message", (channel, message) => {
         ws.send(msgStr);
         sent++;
       } catch (err) {
-        console.error("[WS SEND ERROR] live_account ->", err);
+        ERROR("[WS SEND ERROR] live_account ->", err && err.message ? err.message : err);
       }
     }
-    DBG(
-      `forwarded live_account to ${sent}/${s.size} clients for account ${payload.accountId}`,
-    );
+    DBG(`forwarded live_account to ${sent}/${s.size} clients for account ${payload.accountId}`);
     return;
   }
 
-  // position update
   if (eventType === "LIVE_POSITION") {
     const s = accountIdMap.get(String(payload.accountId));
     if (!s || s.size === 0) return;
@@ -528,16 +736,13 @@ redisSub.on("message", (channel, message) => {
         ws.send(msgStr);
         sent++;
       } catch (err) {
-        console.error("[WS SEND ERROR] live_position ->", err);
+        ERROR("[WS SEND ERROR] live_position ->", err && err.message ? err.message : err);
       }
     }
-    DBG(
-      `forwarded live_position to ${sent}/${s.size} clients for account ${payload.accountId}`,
-    );
+    DBG(`forwarded live_position to ${sent}/${s.size} clients for account ${payload.accountId}`);
     return;
   }
 
-  // pending events: new/modify snapshot, execute, cancel, execute_failed
   if (
     [
       "LIVE_PENDING",
@@ -554,7 +759,6 @@ redisSub.on("message", (channel, message) => {
       return;
     }
 
-    // map engine event -> client message type
     const typeMap = {
       LIVE_PENDING: "live_pending",
       LIVE_PENDING_EXECUTE: "live_pending_execute",
@@ -575,12 +779,10 @@ redisSub.on("message", (channel, message) => {
         ws.send(msgStr);
         sent++;
       } catch (err) {
-        console.error("[WS SEND ERROR]", type, "->", err);
+        ERROR("[WS SEND ERROR]", type, "->", err && err.message ? err.message : err);
       }
     }
-    DBG(
-      `forwarded ${type} to ${sent}/${clients.size} clients for account ${accountId}`,
-    );
+    DBG(`forwarded ${type} to ${sent}/${clients.size} clients for account ${accountId}`);
     return;
   }
 });
@@ -621,40 +823,64 @@ export async function handleClientMessage(clientWs, msg) {
       return;
     }
 
-    // MARKET subscribe
+    // MARKET subscribe (supports inline accountId)
     if (data.type === "subscribe") {
-      if (!clientWs.routes.has("market")) {
+      const market = normalizeMarket(data.market);
+      const symbol = normalizeSymbol(data.symbol);
+
+      if (!market || !symbol) {
         try {
-          clientWs.send(
-            JSON.stringify({
-              status: "error",
-              error: "join market route first",
-            }),
-          );
+          clientWs.send(JSON.stringify({ status: "error", error: "invalid market or symbol" }));
         } catch {}
         return;
       }
 
-      const market = normalizeMarket(data.market);
-      const symbol = normalizeSymbol(data.symbol);
-      const key = makeKey(market, symbol);
+      // ensure client is registered for market route (auto-join)
+      if (!clientWs.routes || !clientWs.routes.has("market")) {
+        clientWs.routes = clientWs.routes || new Set();
+        clientWs.routes.add("market");
+      }
 
+      // attach account directly if provided in subscribe payload
+      if (data.accountId) {
+        const accountId = String(data.accountId);
+        clientWs.accountId = accountId;
+
+        // try to resolve engine account now (await if loader available)
+        let acc = tradeEngine.accounts && tradeEngine.accounts.get(accountId);
+        if (!acc && typeof tradeEngine?.loadAccount === "function") {
+          try {
+            acc = await ensureEngineAccount(accountId);
+          } catch {}
+        }
+        clientWs.engineAccount = acc || null;
+
+        ensureAccountSet(accountId);
+        accountIdMap.get(accountId).add(clientWs.clientId);
+
+        INFO(`client ${clientWs.clientId} subscribed with account ${accountId} engineAccount=${clientWs.engineAccount ? "loaded" : "missing"}`);
+      }
+
+      const key = makeKey(market, symbol);
       subs.add(key);
 
       if (market === "crypto") wsCrypto.subscribe(symbol);
       if (market === "stock") wsStock.subscribe(symbol);
 
-      const hl = await new Promise((resolve) =>
-        setTimeout(async () => {
-          resolve(await HighLowService.getDayHighLow(market, symbol));
-        }, 150),
-      );
+      // fetch day high/low (best-effort)
+      let hl = null;
+      try {
+        hl = await HighLowService.getDayHighLow(market, symbol);
+      } catch (err) {
+        DBG("HighLowService failed", err && err.message ? err.message : err);
+      }
 
       try {
         clientWs.send(
           JSON.stringify({
             status: "subscribed",
             symbol,
+            accountId: clientWs.accountId || null,
             dayOpen: hl?.data?.open ?? null,
             dayHigh: hl?.data?.high ?? null,
             dayLow: hl?.data?.low ?? null,
@@ -662,7 +888,7 @@ export async function handleClientMessage(clientWs, msg) {
           }),
         );
       } catch (err) {
-        console.error("[WS SEND ERROR] subscribe ack ->", err);
+        ERROR("[WS SEND ERROR] subscribe ack ->", err && err.message ? err.message : err);
       }
       return;
     }
@@ -677,14 +903,13 @@ export async function handleClientMessage(clientWs, msg) {
       try {
         clientWs.send(JSON.stringify({ status: "unsubscribed", symbol }));
       } catch (err) {
-        console.error("[WS SEND ERROR] unsubscribe ack ->", err);
+        ERROR("[WS SEND ERROR] unsubscribe ack ->", err && err.message ? err.message : err);
       }
       return;
     }
 
     // ACCOUNT identify -> register + snapshot pending orders + positions + account
     if (data.type === "identify" && data.accountId) {
-      // if client hasn't joined account route, add it automatically (keeps UX simple)
       if (!clientWs.routes.has("account")) {
         clientWs.routes.add("account");
       }
@@ -692,145 +917,128 @@ export async function handleClientMessage(clientWs, msg) {
       const accountId = String(data.accountId);
       clientWs.accountId = accountId;
 
-      // register in accountIdMap
+      // set engine account reference (try load if missing)
+      let acc = tradeEngine.accounts && tradeEngine.accounts.get(accountId);
+      if (!acc && typeof tradeEngine?.loadAccount === "function") {
+        try {
+          acc = await ensureEngineAccount(accountId);
+        } catch {}
+      }
+      clientWs.engineAccount = acc || null;
+
       ensureAccountSet(accountId);
       accountIdMap.get(accountId).add(clientWs.clientId);
 
-      DBG(
-        "client identified",
-        clientWs.clientId,
-        "accountId",
-        accountId,
-        "subscribers:",
-        accountIdMap.get(accountId).size,
-      );
+      DBG("client identified", clientWs.clientId, "accountId", accountId, "subscribers:", accountIdMap.get(accountId).size);
 
-      // send ack
       try {
-        clientWs.send(
-          JSON.stringify({
-            status: "identified",
-            accountId: clientWs.accountId,
-          }),
-        );
+        clientWs.send(JSON.stringify({ status: "identified", accountId: clientWs.accountId, engineAccount: clientWs.engineAccount ? "loaded" : "missing" }));
       } catch (err) {
-        console.error("[WS SEND ERROR] identify ack ->", err);
+        ERROR("[WS SEND ERROR] identify ack ->", err && err.message ? err.message : err);
       }
 
-      // === 1) send pendingOrders snapshot (one-time) ===
+      // pendingOrders snapshot
       try {
         const account = tradeEngine.accounts.get(accountId);
         if (account?.pendingOrders && account.pendingOrders.size > 0) {
-          DBG(
-            "sending pendingOrders snapshot",
-            account.pendingOrders.size,
-            "to",
-            clientWs.clientId,
-          );
+          DBG("sending pendingOrders snapshot", account.pendingOrders.size, "to", clientWs.clientId);
           for (const order of account.pendingOrders.values()) {
             try {
-              clientWs.send(
-                JSON.stringify({ type: "live_pending", data: order }),
-              );
+              clientWs.send(JSON.stringify({ type: "live_pending", data: order }));
             } catch (err) {
-              console.error("[WS SEND ERROR] live_pending snapshot ->", err);
+              ERROR("[WS SEND ERROR] live_pending snapshot ->", err && err.message ? err.message : err);
             }
           }
         } else {
           DBG("no pendingOrders to snapshot for", accountId);
         }
-      } catch (err) {
-        // console.error(
-        //   "[ALLTICK-MGR] error sending pendingOrders snapshot",
-        //   err,
-        // );
-      }
+      } catch {}
 
-      // === 2) send positions snapshot (one-time) ===
+      // positions snapshot (applies spread when possible)
       try {
         const account = tradeEngine.accounts.get(accountId);
         if (account?.positions && account.positions.size > 0) {
-          DBG(
-            "sending positions snapshot",
-            account.positions.size,
-            "to",
-            clientWs.clientId,
-          );
+          DBG("sending positions snapshot", account.positions.size, "to", clientWs.clientId);
           for (const pos of account.positions.values()) {
             try {
+              let currentPriceToSend = pos.openPrice;
+              try {
+                const sym = findSymbolInEngine(pos.symbol);
+                if (clientWs.engineAccount && clientWs.engineAccount.spread_enabled !== false && sym) {
+                  const latestBid = Number(sym.bid || sym.rawBid || 0) || pos.openPrice;
+                  const latestAsk = Number(sym.ask || sym.rawAsk || 0) || pos.openPrice;
+                  const spread = typeof sym.spread === "number" ? sym.spread : 0;
+                  const tick = typeof sym.tickSize === "number" ? sym.tickSize : 0;
+                  const prec = typeof sym.pricePrecision === "number" ? sym.pricePrecision : undefined;
+
+                  let pbid = latestBid;
+                  let pask = latestAsk;
+
+                  if (spread > 0) {
+                    const half = spread / 2;
+                    pbid = pbid - half;
+                    pask = pask + half;
+                  }
+                  pbid = applyTickAndPrecision(pbid, tick, prec, true);
+                  pask = applyTickAndPrecision(pask, tick, prec, false);
+
+                  currentPriceToSend = pos.side === "BUY" ? pask : pbid;
+                } else {
+                  currentPriceToSend = pos.openPrice;
+                }
+              } catch {
+                currentPriceToSend = pos.openPrice;
+              }
+
               const payload = {
-                accountId: accountId,
+                accountId,
                 positionId: pos.positionId,
                 volume: pos.volume,
                 openTime: pos.openTime || Date.now(),
                 symbol: pos.symbol,
                 side: pos.side,
                 openPrice: pos.openPrice,
-                currentPrice: pos.openPrice,
+                currentPrice: currentPriceToSend,
                 floatingPnL: Number((pos.floatingPnL || 0).toFixed(2)),
                 stopLoss: pos.stopLoss ?? null,
                 takeProfit: pos.takeProfit ?? null,
                 commission: pos.commission || 0,
                 swapPerDay: pos.swapPerDay || 0,
               };
-              clientWs.send(
-                JSON.stringify({ type: "live_position", data: payload }),
-              );
+              clientWs.send(JSON.stringify({ type: "live_position", data: payload }));
             } catch (err) {
-              console.error("[WS SEND ERROR] live_position snapshot ->", err);
+              ERROR("[WS SEND ERROR] live_position snapshot ->", err && err.message ? err.message : err);
             }
           }
         } else {
           DBG("no positions to snapshot for", accountId);
         }
-      } catch (err) {
-        // console.error("[ALLTICK-MGR] error sending positions snapshot", err);
-      }
+      } catch {}
 
-      // === 3) send account snapshot (one-time) ===
+      // account snapshot
       try {
         const account = tradeEngine.accounts.get(accountId);
         if (account) {
           const accPayload = {
             accountId,
-            balance: Number(
-              account.balance?.toFixed
-                ? account.balance.toFixed(2)
-                : account.balance,
-            ),
-            equity: Number(
-              account.equity?.toFixed
-                ? account.equity.toFixed(2)
-                : account.equity,
-            ),
-            usedMargin: Number(
-              account.usedMargin?.toFixed
-                ? account.usedMargin.toFixed(2)
-                : account.usedMargin,
-            ),
-            freeMargin: Number(
-              account.freeMargin?.toFixed
-                ? account.freeMargin.toFixed(2)
-                : account.freeMargin,
-            ),
+            balance: Number(account.balance?.toFixed ? account.balance.toFixed(2) : account.balance),
+            equity: Number(account.equity?.toFixed ? account.equity.toFixed(2) : account.equity),
+            usedMargin: Number(account.usedMargin?.toFixed ? account.usedMargin.toFixed(2) : account.usedMargin),
+            freeMargin: Number(account.freeMargin?.toFixed ? account.freeMargin.toFixed(2) : account.freeMargin),
           };
-          clientWs.send(
-            JSON.stringify({ type: "live_account", data: accPayload }),
-          );
+          clientWs.send(JSON.stringify({ type: "live_account", data: accPayload }));
           DBG("sent account snapshot to", clientWs.clientId, accPayload);
         } else {
           DBG("no account object found in tradeEngine for", accountId);
         }
       } catch (err) {
-        console.error("[ALLTICK-MGR] error sending account snapshot", err);
+        ERROR("[ALLTICK-MGR] error sending account snapshot", err && err.message ? err.message : err);
       }
-
-      // After snapshots, future pending/position/account events will be forwarded via redisSub handler
 
       return;
     }
   } catch (err) {
-    console.error("[WS CLIENT] Invalid message", err);
+    ERROR("[WS CLIENT] Invalid message", err && err.message ? err.message : err);
     try {
       clientWs.send(JSON.stringify({ status: "error", error: "Invalid JSON" }));
     } catch {}

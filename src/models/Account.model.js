@@ -2,7 +2,7 @@ import mongoose from "mongoose";
 
 const AccountSchema = new mongoose.Schema(
   {
-    //  USER
+    // USER
     user_id: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -10,7 +10,7 @@ const AccountSchema = new mongoose.Schema(
       index: true,
     },
 
-    //  PLAN REFERENCE (ADMIN / AUDIT)
+    // PLAN REFERENCE
     account_plan_id: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "AccountPlan",
@@ -18,7 +18,7 @@ const AccountSchema = new mongoose.Schema(
       index: true,
     },
 
-    //  ACCOUNT IDENTIFICATION
+    // ACCOUNT IDENTIFICATION
     account_number: {
       type: String,
       required: true,
@@ -33,27 +33,30 @@ const AccountSchema = new mongoose.Schema(
       index: true,
     },
 
-    //  PLAN SNAPSHOT (FAST READ – NO POPULATE)
+    // PLAN SNAPSHOT
     plan_name: {
       type: String,
-      required: true, // STANDARD / ECN / RAW etc
+      required: true,
       index: true,
     },
 
     leverage: {
       type: Number,
-      required: true, // snapshot from plan
-    },
-
-    spread_type: {
-      type: String,
-      enum: ["FIXED", "FLOATING"],
       required: true,
     },
 
+    // ✅ SPREAD CONTROL (NEW)
+    spread_enabled: {
+      type: Boolean,
+      default: true, // ✅ spread ON by default
+      index: true,
+    },
+
+    // ACCOUNT CUSTOM SPREAD (0 = use symbol spread)
     spread_pips: {
       type: Number,
-      required: true,
+      default: 0,
+      min: 0,
     },
 
     commission_per_lot: {
@@ -66,20 +69,19 @@ const AccountSchema = new mongoose.Schema(
       default: true,
     },
 
-    // ✅ SWAP CHARGE SNAPSHOT (From Plan)
+    // SWAP CHARGE
     swap_charge: {
       type: Number,
-      default: 0, // per lot per day
+      default: 0,
     },
 
-    //  FINANCIALS
+    // FINANCIALS
     balance: {
       type: Number,
       default: 0,
       min: 0,
     },
 
-    // LOCKED FUNDS FOR PENDING WITHDRAWALS
     hold_balance: {
       type: Number,
       default: 0,
@@ -94,17 +96,17 @@ const AccountSchema = new mongoose.Schema(
 
     currency: {
       type: String,
-      required: true, // USD / INR / EUR etc
+      required: true,
     },
 
-    //  FIRST DEPOSIT FLAG
+    // FIRST DEPOSIT
     first_deposit: {
       type: Boolean,
       default: false,
       index: true,
     },
 
-    //  STATUS
+    // STATUS
     status: {
       type: String,
       enum: ["active", "disabled"],
@@ -118,7 +120,7 @@ const AccountSchema = new mongoose.Schema(
   },
 );
 
-//  COMPOSITE INDEXES
+// INDEXES
 AccountSchema.index({ user_id: 1, account_type: 1 });
 AccountSchema.index({ user_id: 1, status: 1 });
 

@@ -64,6 +64,15 @@ const InstrumentSchema = new mongoose.Schema(
     },
 
     /* =========================
+       SPREAD
+    ========================== */
+    spread: {
+      type: Number,
+      required: true,
+      default: 0
+    },
+
+    /* =========================
        CONTRACT DETAILS
     ========================== */
     contractSize: {
@@ -104,7 +113,7 @@ const InstrumentSchema = new mongoose.Schema(
     }
   },
   {
-    timestamps: false,   //  speed + Redis friendly
+    timestamps: false, // speed + Redis friendly
     versionKey: false
   }
 );

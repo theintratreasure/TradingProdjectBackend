@@ -38,14 +38,23 @@ const accounts = await Account.find(
     user_id: 1,
     commission_per_lot: 1,
     swap_charge: 1,
+    spread_enabled: 1
   }
 ).lean();
 
 
-  const symbols = await Instrument.find(
-    { isTradeable: true },
-    { code: 1, contractSize: 1, maxLeverage: 1 }
-  ).lean();
+const symbols = await Instrument.find(
+  { isTradeable: true },
+  {
+    code: 1,
+    contractSize: 1,
+    maxLeverage: 1,
+    spread: 1,
+    tickSize: 1,
+    pricePrecision: 1,
+  }
+).lean();
+
 
 
   // =========================
