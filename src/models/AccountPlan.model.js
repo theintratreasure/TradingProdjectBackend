@@ -8,9 +8,16 @@ const AccountPlanSchema = new mongoose.Schema(
       unique: true // STANDARD / RAW / ECN / PREMIUM etc
     },
 
+    // ✅ DEFAULT PLAN SPREAD (PIPS)
     spreadPips: {
       type: Number,
       default: 0.0 // 0.0 = market pricing
+    },
+
+    // ✅ PLAN LEVEL SPREAD ENABLE / DISABLE
+    spread_enabled: {
+      type: Boolean,
+      default: true // true = spread ON, false = spread OFF
     },
 
     commission: {
@@ -46,12 +53,6 @@ const AccountPlanSchema = new mongoose.Schema(
     is_demo_allowed: {
       type: Boolean,
       default: false
-    },
-
-    spread_type: {
-      type: String,
-      enum: ['FIXED', 'FLOATING'],
-      default: 'FLOATING'
     },
 
     commission_per_lot: {

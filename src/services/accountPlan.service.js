@@ -39,19 +39,31 @@ function normalizePlanData(data) {
   return {
     ...data,
 
+    // ✅ SPREAD PIPS
     spreadPips:
-      typeof data.spreadPips === 'number' ? data.spreadPips : 0,
+      typeof data.spreadPips === 'number'
+        ? data.spreadPips
+        : 0,
 
+    // ✅ SPREAD ENABLE / DISABLE
+    spread_enabled:
+      typeof data.spread_enabled === 'boolean'
+        ? data.spread_enabled
+        : true,
+
+    // ✅ COMMISSION
     commission_per_lot:
       typeof data.commission_per_lot === 'number'
         ? data.commission_per_lot
         : 0,
 
+    // ✅ SWAP CHARGE
     swap_charge:
       typeof data.swap_charge === 'number'
         ? data.swap_charge
         : 0,
 
+    // ✅ SWAP ENABLE
     swap_enabled:
       typeof data.swap_enabled === 'boolean'
         ? data.swap_enabled
@@ -175,11 +187,6 @@ export async function getActivePlans() {
 
   const end = process.hrtime.bigint();
 
-  console.log(
-    'DB + REDIS SET |',
-    Number(end - start) / 1_000_000,
-    'ms'
-  );
 
   return plans;
 }

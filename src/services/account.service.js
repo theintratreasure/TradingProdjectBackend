@@ -85,12 +85,19 @@ export async function createAccount({ userId, account_plan_id, account_type }) {
   /* ================= SNAPSHOT ================= */
 
   const commissionPerLot =
-    typeof plan.commission_per_lot === "number" ? plan.commission_per_lot : 0;
+    typeof plan.commission_per_lot === "number"
+      ? plan.commission_per_lot
+      : 0;
 
-  const swapEnabled = !!plan.swap_enabled;
+  const swapEnabled =
+    typeof plan.swap_enabled === "boolean"
+      ? plan.swap_enabled
+      : true;
 
   const swapCharge =
-    typeof plan.swap_charge === "number" ? plan.swap_charge : 0;
+    typeof plan.swap_charge === "number"
+      ? plan.swap_charge
+      : 0;
 
   /* ================= CREATE ================= */
 
@@ -105,9 +112,16 @@ export async function createAccount({ userId, account_plan_id, account_type }) {
 
     leverage,
 
-    // ✅ SPREAD CONTROL
-    spread_enabled: true,
-    spread_pips: 0,
+    // ✅ SPREAD CONTROL (FROM PLAN)
+    spread_enabled:
+      typeof plan.spread_enabled === "boolean"
+        ? plan.spread_enabled
+        : true,
+
+    spread_pips:
+      typeof plan.spreadPips === "number"
+        ? plan.spreadPips
+        : 0,
 
     commission_per_lot: commissionPerLot,
 
@@ -180,6 +194,7 @@ export async function createAccount({ userId, account_plan_id, account_type }) {
     watch_password: watchPass,
   };
 }
+
 
 /* =====================================================
    GET USER ACCOUNTS
