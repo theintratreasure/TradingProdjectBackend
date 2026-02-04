@@ -10,6 +10,7 @@ import { signAccessToken } from '../utils/jwt.util.js';
 import UserDevice from '../models/UserDevice.model.js';
 import admin from '../config/firebase.js';
 import UserProfile from '../models/UserProfile.model.js';
+import mongoose from 'mongoose';
 
 // ✅ ADD THESE IMPORTS
 import AccountPlan from '../models/AccountPlan.model.js';
@@ -464,4 +465,43 @@ export async function resendEmailVerificationService(email) {
     user_id: user._id,
     message: 'Confirmation email resent'
   };
+}
+
+/* ================= ADMIN CHANGE USER PASSWORD ================= */
+export async function adminChangeUserPasswordService(userId, newPassword) {
+  if (!mongoose.isValidObjectId(userId)) {
+    throw new Error('Invalid userId');
+  }
+
+  if (!newPassword || typeof newPassword !== 'string') {
+    throw new Error('New password is required');
+  }
+
+  const user = await User.findById(userId).select('_id').lean();
+  if (!user) {
+    throw new Error('User not found');
+  }
+
+  const passwordHash = await hashPassword(newPassword);
+
+  const result = await Auth.updateOne(
+    { user_id: userId },
+    {
+      $set: { password_hash: passwordHash, login_attempts: 0 },
+      $unset: {
+        reset_token_hash: 1,
+        reset_token_expires_at: 1,
+        refresh_token_hash: 1,
+        refresh_token_expires_at: 1,
+        refresh_token_ip: 1,
+        refresh_token_device: 1
+      }
+    }
+  );
+
+  if (result.matchedCount === 0) {
+    throw new Error('Auth record not found');
+  }
+
+  return { userId };
 }

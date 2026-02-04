@@ -221,3 +221,119 @@ export async function resetWatchPasswordService({
 
   return { message: "Watch password updated successfully" };
 }
+
+/* =====================================================
+   ADMIN RESET TRADE PASSWORD
+===================================================== */
+export async function adminResetTradePasswordService({
+  accountId,
+  newPassword,
+}) {
+  if (!newPassword || newPassword.length < 8) {
+    throw new Error("Password must be at least 8 characters");
+  }
+
+  const account = await Account.findOne({
+    _id: accountId,
+    status: "active",
+  }).lean();
+
+  if (!account) {
+    throw new Error("Account not found or inactive");
+  }
+
+  const auth = await AccountAuth.findOne({
+    account_id: account._id,
+  });
+
+  if (!auth) {
+    throw new Error("Account auth not found");
+  }
+
+  const newPasswordHash = await hashPassword(newPassword);
+
+  await AccountAuth.updateOne(
+    { _id: auth._id },
+    {
+      $set: {
+        trade_password_hash: newPasswordHash,
+        credentials_last_reset_at: new Date(),
+        access_token_hash: null,
+        access_token_expires_at: null,
+        login_attempts: 0,
+      },
+    }
+  );
+
+  const user = await User.findById(account.user_id, { email: 1 }).lean();
+  if (user?.email) {
+    sendAccountCreatedMail({
+      email: user.email,
+      accountNumber: account.account_number,
+      accountType: account.account_type,
+      planName: account.plan_name,
+      tradePassword: "UPDATED BY ADMIN",
+      watchPassword: "UNCHANGED",
+    }).catch(() => {});
+  }
+
+  return { message: "Trade password updated successfully" };
+}
+
+/* =====================================================
+   ADMIN RESET WATCH PASSWORD
+===================================================== */
+export async function adminResetWatchPasswordService({
+  accountId,
+  newPassword,
+}) {
+  if (!newPassword || newPassword.length < 8) {
+    throw new Error("Password must be at least 8 characters");
+  }
+
+  const account = await Account.findOne({
+    _id: accountId,
+    status: "active",
+  }).lean();
+
+  if (!account) {
+    throw new Error("Account not found or inactive");
+  }
+
+  const auth = await AccountAuth.findOne({
+    account_id: account._id,
+  });
+
+  if (!auth) {
+    throw new Error("Account auth not found");
+  }
+
+  const newPasswordHash = await hashPassword(newPassword);
+
+  await AccountAuth.updateOne(
+    { _id: auth._id },
+    {
+      $set: {
+        watch_password_hash: newPasswordHash,
+        credentials_last_reset_at: new Date(),
+        access_token_hash: null,
+        access_token_expires_at: null,
+        login_attempts: 0,
+      },
+    }
+  );
+
+  const user = await User.findById(account.user_id, { email: 1 }).lean();
+  if (user?.email) {
+    sendAccountCreatedMail({
+      email: user.email,
+      accountNumber: account.account_number,
+      accountType: account.account_type,
+      planName: account.plan_name,
+      tradePassword: "UNCHANGED",
+      watchPassword: "UPDATED BY ADMIN",
+    }).catch(() => {});
+  }
+
+  return { message: "Watch password updated successfully" };
+}

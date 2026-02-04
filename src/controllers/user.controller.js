@@ -1,5 +1,5 @@
 import UserDevice from '../models/UserDevice.model.js';
-import { getMyProfileService, updateMyProfileService } from '../services/user.service.js';
+import { adminListUsersService, adminUpdateUserService, getMyProfileService, updateMyProfileService, searchUsersService } from '../services/user.service.js';
 
 export async function getMyProfile(req, res) {
   const data = await getMyProfileService(req.user._id);
@@ -93,4 +93,56 @@ export async function saveFcmToken(req, res) {
     });
   }
 }
+
+export async function adminSearchUsers(req, res) {
+  try {
+    const data = await searchUsersService(req.query);
+
+    return res.json({
+      success: true,
+      data
+    });
+  } catch (err) {
+    return res.status(400).json({
+      success: false,
+      message: err.message
+    });
+  }
+}
+
+export async function adminUpdateUser(req, res) {
+  try {
+    const { userId } = req.params;
+    const data = await adminUpdateUserService(userId, req.body);
+
+    return res.json({
+      success: true,
+      message: 'User updated successfully',
+      data
+    });
+  } catch (err) {
+    return res.status(400).json({
+      success: false,
+      message: err.message
+    });
+  }
+}
+
+export async function adminListUsers(req, res) {
+  try {
+    const data = await adminListUsersService(req.query);
+
+    return res.json({
+      success: true,
+      data: data.items,
+      pagination: data.pagination
+    });
+  } catch (err) {
+    return res.status(400).json({
+      success: false,
+      message: err.message
+    });
+  }
+}
+
 

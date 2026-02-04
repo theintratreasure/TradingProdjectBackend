@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import Account from "../models/Account.model.js";
 import AccountPlan from "../models/AccountPlan.model.js";
 import AccountAuth from "../models/AccountAuth.model.js";
@@ -336,3 +337,252 @@ export async function setAccountLeverage({ userId, accountId, leverage }) {
     leverage: account.leverage,
   };
 }
+
+/* =====================================================
+   ADMIN: LIST USER ACCOUNTS (FILTER + PAGINATION)
+===================================================== */
+export async function adminListUserAccounts({ userId, query = {} }) {
+  if (!userId || !mongoose.isValidObjectId(userId)) {
+    throw new Error("Invalid userId");
+  }
+
+  const pageRaw = Number(query.page);
+  const limitRaw = Number(query.limit);
+  const page = Number.isFinite(pageRaw) && pageRaw > 0 ? pageRaw : 1;
+  const limit =
+    Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 100) : 10;
+  const skip = (page - 1) * limit;
+
+  const filter = { user_id: new mongoose.Types.ObjectId(userId) };
+
+  if (typeof query.account_type === "string" && query.account_type.trim()) {
+    filter.account_type = query.account_type.trim().toLowerCase();
+  }
+
+  if (typeof query.status === "string" && query.status.trim()) {
+    filter.status = query.status.trim().toLowerCase();
+  }
+
+  const [items, total] = await Promise.all([
+    Account.find(filter)
+      .select(
+        "_id user_id account_plan_id account_number account_type plan_name leverage spread_enabled spread_pips commission_per_lot swap_enabled swap_charge balance hold_balance equity currency first_deposit status createdAt updatedAt"
+      )
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean(),
+    Account.countDocuments(filter)
+  ]);
+
+  return {
+    items,
+    pagination: {
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit)
+    }
+  };
+}
+
+/* =====================================================
+   ADMIN: SEARCH ACCOUNTS (USER NAME / EMAIL / PHONE / ACCOUNT NUMBER)
+===================================================== */
+export async function adminSearchAccounts({ query = {} }) {
+  const q = String(query.q || "").trim();
+
+  const pageRaw = Number(query.page);
+  const limitRaw = Number(query.limit);
+  const page = Number.isFinite(pageRaw) && pageRaw > 0 ? pageRaw : 1;
+  const limit =
+    Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 100) : 10;
+  const skip = (page - 1) * limit;
+
+  const accountFilter = {};
+  if (typeof query.account_type === "string" && query.account_type.trim()) {
+    accountFilter.account_type = query.account_type.trim().toLowerCase();
+  }
+  if (typeof query.status === "string" && query.status.trim()) {
+    accountFilter.status = query.status.trim().toLowerCase();
+  }
+
+  const pipeline = [
+    { $match: accountFilter },
+    {
+      $lookup: {
+        from: "users",
+        localField: "user_id",
+        foreignField: "_id",
+        as: "user",
+      },
+    },
+    { $unwind: { path: "$user", preserveNullAndEmptyArrays: true } },
+    ...(q
+      ? [
+          {
+            $match: {
+              $or: [
+                { account_number: { $regex: new RegExp(q, "i") } },
+                { "user.name": { $regex: new RegExp(q, "i") } },
+                { "user.email": { $regex: new RegExp(q, "i") } },
+                { "user.phone": { $regex: new RegExp(q, "i") } },
+              ],
+            },
+          },
+        ]
+      : []),
+    { $sort: { createdAt: -1, _id: -1 } },
+    {
+      $facet: {
+        items: [
+          { $skip: skip },
+          { $limit: limit },
+          {
+            $project: {
+              _id: 1,
+              user_id: 1,
+              account_plan_id: 1,
+              account_number: 1,
+              account_type: 1,
+              plan_name: 1,
+              leverage: 1,
+              spread_enabled: 1,
+              spread_pips: 1,
+              commission_per_lot: 1,
+              swap_enabled: 1,
+              swap_charge: 1,
+              balance: 1,
+              hold_balance: 1,
+              equity: 1,
+              currency: 1,
+              first_deposit: 1,
+              status: 1,
+              createdAt: 1,
+              updatedAt: 1,
+              user: {
+                _id: "$user._id",
+                name: "$user.name",
+                email: "$user.email",
+                phone: "$user.phone",
+                userType: "$user.userType",
+                isMailVerified: "$user.isMailVerified",
+                kycStatus: "$user.kycStatus",
+              },
+            },
+          },
+        ],
+        total: [{ $count: "count" }],
+      },
+    },
+  ];
+
+  const result = await Account.aggregate(pipeline).allowDiskUse(true);
+  const items = result?.[0]?.items || [];
+  const total = result?.[0]?.total?.[0]?.count || 0;
+
+  return {
+    items,
+    pagination: {
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit),
+    },
+  };
+}
+
+/* =====================================================
+   ADMIN: UPDATE ACCOUNT (FULL DETAILS)
+===================================================== */
+export async function adminUpdateAccountService({ accountId, payload = {} }) {
+  if (!accountId || !mongoose.isValidObjectId(accountId)) {
+    throw new Error("Invalid accountId");
+  }
+
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Request body is required");
+  }
+
+  const account = await Account.findById(accountId);
+  if (!account) {
+    throw new Error("Account not found");
+  }
+
+  const plan = await AccountPlan.findById(account.account_plan_id).lean();
+
+  const allowedFields = [
+    "leverage",
+    "spread_enabled",
+    "spread_pips",
+    "commission_per_lot",
+    "swap_enabled",
+    "swap_charge",
+    "status",
+  ];
+
+  const updates = {};
+  for (const key of allowedFields) {
+    if (payload[key] !== undefined) {
+      updates[key] = payload[key];
+    }
+  }
+
+  if (updates.leverage !== undefined) {
+    if (typeof updates.leverage !== "number" || updates.leverage < 1) {
+      throw new Error("Invalid leverage");
+    }
+
+    if (plan && typeof plan.max_leverage === "number" && plan.max_leverage > 0) {
+      if (updates.leverage > plan.max_leverage) {
+        throw new Error(`Max leverage: ${plan.max_leverage}`);
+      }
+    }
+  }
+
+  if (updates.spread_pips !== undefined) {
+    if (typeof updates.spread_pips !== "number" || updates.spread_pips < 0) {
+      throw new Error("Invalid spread_pips");
+    }
+  }
+
+  if (updates.commission_per_lot !== undefined) {
+    if (
+      typeof updates.commission_per_lot !== "number" ||
+      updates.commission_per_lot < 0
+    ) {
+      throw new Error("Invalid commission_per_lot");
+    }
+  }
+
+  if (updates.swap_charge !== undefined) {
+    if (typeof updates.swap_charge !== "number" || updates.swap_charge < 0) {
+      throw new Error("Invalid swap_charge");
+    }
+  }
+
+  if (updates.status !== undefined) {
+    const status = String(updates.status).toLowerCase();
+    if (!["active", "disabled"].includes(status)) {
+      throw new Error("Invalid status");
+    }
+    updates.status = status;
+  }
+
+  if (updates.spread_enabled !== undefined) {
+    updates.spread_enabled = Boolean(updates.spread_enabled);
+  }
+
+  if (updates.swap_enabled !== undefined) {
+    updates.swap_enabled = Boolean(updates.swap_enabled);
+  }
+
+
+  Object.assign(account, updates);
+  await account.save();
+
+  await EngineSync.syncAccount(account._id);
+
+  return account.toObject();
+}
+

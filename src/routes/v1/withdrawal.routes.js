@@ -5,6 +5,7 @@ import {
   listAdminWithdrawalsController,
   adminApproveWithdrawalController,
   adminRejectWithdrawalController,
+  adminCreateWithdrawalController,
 } from "../../controllers/withdrawal.controller.js";
 import { authMiddleware } from "../../middlewares/auth.middleware.js";
 import { adminAuth } from "../../middlewares/adminAuth.middleware.js";
@@ -20,6 +21,7 @@ router.get("/", authMiddleware, listUserWithdrawalsController);
 /**
  * ADMIN ROUTES
  */
+router.post("/admin/create", authMiddleware, adminAuth, adminCreateWithdrawalController);
 router.get("/admin/all",authMiddleware, adminAuth, listAdminWithdrawalsController);
 router.patch("/admin/:withdrawalId/approve",authMiddleware,adminAuth, adminApproveWithdrawalController);
 router.patch("/admin/:withdrawalId/reject",authMiddleware,adminAuth, adminRejectWithdrawalController);

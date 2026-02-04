@@ -8,8 +8,11 @@ import {
   refreshToken,
   logout,
   verifyEmail,
-  resendVerifyEmail
+  resendVerifyEmail,
+  adminChangeUserPassword
 } from '../../controllers/auth.controller.js';
+import { authMiddleware } from '../../middlewares/auth.middleware.js';
+import { adminAuth } from '../../middlewares/adminAuth.middleware.js';
 
 const router = express.Router();
 
@@ -22,4 +25,5 @@ router.post('/forgot-password', forgotPassword);
 router.post('/reset-password', resetPassword);
 router.post('/refresh-token', refreshToken);
 router.post('/logout', logout);
+router.patch('/admin/user/:userId/password', authMiddleware, adminAuth, adminChangeUserPassword);
 export default router;

@@ -103,6 +103,172 @@ const validatePayout = ({ method, payout }) => {
   return { ok: true, message: "OK" };
 };
 
+/* -------------------- ADMIN: CREATE WITHDRAWAL (INSTANT) -------------------- */
+/**
+ * ADMIN: CREATE WITHDRAWAL
+ * - No hold balance
+ * - No pending state
+ * - Must have no OPEN trades
+ */
+export const adminCreateWithdrawal = async ({
+  adminId,
+  ipAddress,
+  payload,
+}) => {
+  const session = await mongoose.startSession();
+
+  try {
+    const { accountId, amount, method, payout } = payload;
+
+    if (!accountId || !mongoose.isValidObjectId(accountId)) {
+      return { ok: false, statusCode: 400, message: "Invalid accountId" };
+    }
+
+    if (typeof amount !== "number" || amount < 1) {
+      return { ok: false, statusCode: 400, message: "Invalid amount" };
+    }
+
+    if (!method || typeof method !== "string") {
+      return { ok: false, statusCode: 400, message: "Method is required" };
+    }
+
+    const payoutCheck = validatePayout({ method, payout });
+    if (!payoutCheck.ok) {
+      return { ok: false, statusCode: 400, message: payoutCheck.message };
+    }
+
+    let createdWithdrawal = null;
+    let newBalanceAfter = null;
+
+    await session.withTransaction(async () => {
+      /* =========================
+         ACCOUNT CHECK
+      ========================== */
+      const account = await Account.findOne({
+        _id: accountId,
+        status: "active",
+      }).session(session);
+
+      if (!account) {
+        throw new Error("Account not found or inactive");
+      }
+
+      if (account.account_type !== "live") {
+        throw new Error("Withdrawals are allowed only for live accounts");
+      }
+
+      /* =========================
+         OPEN TRADE CHECK (DB)
+      ========================== */
+      const openTrade = await Trade.exists({
+        accountId: account._id,
+        status: "OPEN",
+      }).session(session);
+
+      if (openTrade) {
+        throw new Error("Please close all trades before withdrawal");
+      }
+
+      /* =========================
+         BALANCE CHECK
+      ========================== */
+      if (amount > account.balance) {
+        throw new Error("Insufficient balance");
+      }
+
+      /* =========================
+         DEDUCT BALANCE (NO HOLD)
+      ========================== */
+      account.balance = account.balance - amount;
+      account.equity = account.balance;
+      newBalanceAfter = account.balance;
+
+      await account.save({ session });
+
+      /* =========================
+         CREATE WITHDRAWAL
+      ========================== */
+      const withdrawalDocs = await Withdrawal.create(
+        [
+          {
+            user: account.user_id,
+            account: account._id,
+            amount,
+            method,
+            payout: {
+              upi_id: payout?.upi_id || "",
+              bank_name: payout?.bank_name || "",
+              account_holder_name: payout?.account_holder_name || "",
+              account_number: payout?.account_number || "",
+              ifsc: payout?.ifsc || "",
+              crypto_network: payout?.crypto_network || "",
+              crypto_address: payout?.crypto_address || "",
+            },
+            status: "COMPLETED",
+            actionBy: adminId,
+            actionAt: new Date(),
+            ipAddress: ipAddress || "",
+          },
+        ],
+        { session },
+      );
+
+      createdWithdrawal = withdrawalDocs[0];
+
+      /* =========================
+         TRANSACTION LOG
+      ========================== */
+      await Transaction.create(
+        [
+          {
+            user: account.user_id,
+            account: account._id,
+            type: "WITHDRAWAL",
+            amount,
+            balanceAfter: account.balance,
+            status: "SUCCESS",
+            referenceType: "WITHDRAWAL",
+            referenceId: createdWithdrawal._id,
+            createdBy: adminId,
+            remark: "Admin withdrawal",
+          },
+        ],
+        { session },
+      );
+    });
+
+    // Sync engine: update balance (best-effort)
+    try {
+      if (newBalanceAfter !== null) {
+        await EngineSync.updateBalance(
+          String(payload.accountId),
+          Number(newBalanceAfter),
+        );
+      }
+    } catch (e) {
+      console.error(
+        "[ENGINE_SYNC] updateBalance failed (adminCreateWithdrawal)",
+        e && e.message ? e.message : e,
+      );
+    }
+
+    return {
+      ok: true,
+      statusCode: 201,
+      message: "Admin withdrawal completed",
+      data: createdWithdrawal,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      statusCode: 400,
+      message: error instanceof Error ? error.message : "Something went wrong",
+    };
+  } finally {
+    session.endSession();
+  }
+};
+
 /* -------------------- USER: CREATE WITHDRAWAL -------------------- */
 /**
  * USER: CREATE WITHDRAWAL REQUEST

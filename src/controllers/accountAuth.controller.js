@@ -2,6 +2,8 @@ import {
   accountLoginService,
   resetTradePasswordService,
   resetWatchPasswordService,
+  adminResetTradePasswordService,
+  adminResetWatchPasswordService,
 } from "../services/accountAuth.service.js";
 
 /* =====================================================
@@ -113,6 +115,52 @@ export async function resetWatchPasswordController(req, res) {
       userId,
       accountId,
       newPassword: cleanPassword,
+    });
+
+    return res.json(result);
+  } catch (err) {
+    return res.status(400).json({ message: err.message });
+  }
+}
+
+/* =====================================================
+   ADMIN RESET TRADE PASSWORD
+===================================================== */
+export async function adminResetTradePasswordController(req, res) {
+  try {
+    const { accountId } = req.params;
+    const { newPassword } = req.body;
+
+    if (!accountId) {
+      return res.status(400).json({ message: "Account ID is required" });
+    }
+
+    const result = await adminResetTradePasswordService({
+      accountId,
+      newPassword,
+    });
+
+    return res.json(result);
+  } catch (err) {
+    return res.status(400).json({ message: err.message });
+  }
+}
+
+/* =====================================================
+   ADMIN RESET WATCH PASSWORD
+===================================================== */
+export async function adminResetWatchPasswordController(req, res) {
+  try {
+    const { accountId } = req.params;
+    const { newPassword } = req.body;
+
+    if (!accountId) {
+      return res.status(400).json({ message: "Account ID is required" });
+    }
+
+    const result = await adminResetWatchPasswordService({
+      accountId,
+      newPassword,
     });
 
     return res.json(result);

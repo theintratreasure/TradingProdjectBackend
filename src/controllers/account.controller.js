@@ -3,7 +3,10 @@ import {
   getUserAccounts,
   getUserAccountDetail,
   resetDemoAccount,
-  setAccountLeverage
+  setAccountLeverage,
+  adminListUserAccounts,
+  adminSearchAccounts,
+  adminUpdateAccountService
 } from "../services/account.service.js";
 
 export async function createAccountController(req, res) {
@@ -123,6 +126,65 @@ export async function setAccountLeverageController(req, res) {
     });
   } catch (err) {
     return res.status(err.statusCode || 400).json({
+      success: false,
+      message: err.message
+    });
+  }
+}
+
+export async function adminListUserAccountsController(req, res) {
+  try {
+    const { userId } = req.params;
+    const data = await adminListUserAccounts({
+      userId,
+      query: req.query
+    });
+
+    return res.json({
+      success: true,
+      data: data.items,
+      pagination: data.pagination
+    });
+  } catch (err) {
+    return res.status(400).json({
+      success: false,
+      message: err.message
+    });
+  }
+}
+
+export async function adminSearchAccountsController(req, res) {
+  try {
+    const data = await adminSearchAccounts({ query: req.query });
+
+    return res.json({
+      success: true,
+      data: data.items,
+      pagination: data.pagination
+    });
+  } catch (err) {
+    return res.status(400).json({
+      success: false,
+      message: err.message
+    });
+  }
+}
+
+export async function adminUpdateAccountController(req, res) {
+  try {
+    const { accountId } = req.params;
+    const data = await adminUpdateAccountService({
+      accountId,
+      payload: req.body
+    });
+
+    return res.json({
+      success: true,
+      message: "Account updated successfully",
+      data
+    });
+  } catch (err) {
+    return res.status(400).json({
       success: false,
       message: err.message
     });

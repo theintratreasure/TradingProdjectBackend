@@ -4,6 +4,7 @@ import {
   listAdminWithdrawals,
   adminApproveWithdrawal,
   adminRejectWithdrawal,
+  adminCreateWithdrawal,
 } from "../services/withdrawal.service.js";
 
 export const createWithdrawalRequestController = async (req, res) => {
@@ -68,6 +69,20 @@ export const adminRejectWithdrawalController = async (req, res) => {
   return res.status(result.statusCode).json({
     success: result.ok,
     message: result.message,
+    data: result.data || null,
+  });
+};
+
+export const adminCreateWithdrawalController = async (req, res) => {
+  const result = await adminCreateWithdrawal({
+    adminId: req.user?._id,
+    ipAddress: req.ip || "",
+    payload: req.body,
+  });
+
+  return res.status(result.statusCode).json({
+    success: result.ok,
+    message: result.message || "OK",
     data: result.data || null,
   });
 };

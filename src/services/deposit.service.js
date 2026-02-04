@@ -395,3 +395,98 @@ export async function editDepositAmountService({
     status: deposit.status,
   };
 }
+
+/* =========================
+   ADMIN CREATE DEPOSIT
+========================== */
+export async function adminCreateDepositService({
+  accountId,
+  amount,
+  method,
+  proof,
+  adminId,
+  ipAddress,
+}) {
+  if (!accountId || !amount || !method) {
+    throw new Error("All fields are required");
+  }
+
+  if (typeof amount !== "number" || Number.isNaN(amount) || amount <= 0) {
+    throw new Error("Invalid deposit amount");
+  }
+
+  const safeProof = proof && typeof proof === "object"
+    ? proof
+    : { image_url: "", image_public_id: "" };
+
+  const session = await mongoose.startSession();
+  let createdDeposit = null;
+
+  try {
+    await session.withTransaction(async () => {
+      const account = await Account.findOne({
+        _id: accountId,
+        status: "active",
+      }).session(session);
+
+      if (!account) {
+        throw new Error("Account not found or inactive");
+      }
+
+      const newBalance = account.balance + amount;
+
+      createdDeposit = await Deposit.create(
+        [
+          {
+            user: account.user_id,
+            account: account._id,
+            amount,
+            method,
+            proof: safeProof,
+            status: "APPROVED",
+            actionBy: adminId,
+            actionAt: new Date(),
+            ipAddress,
+          },
+        ],
+        { session },
+      );
+
+      await Account.updateOne(
+        { _id: account._id },
+        {
+          $set: {
+            balance: newBalance,
+            first_deposit: true,
+          },
+        },
+        { session },
+      );
+
+      await Transaction.create(
+        [
+          {
+            user: account.user_id,
+            account: account._id,
+            type: "DEPOSIT",
+            amount,
+            balanceAfter: newBalance,
+            status: "SUCCESS",
+            referenceType: "DEPOSIT",
+            referenceId: createdDeposit[0]._id,
+            createdBy: adminId,
+            remark: "Admin deposit",
+          },
+        ],
+        { session },
+      );
+    });
+
+    // Sync engine after DB commit
+    await EngineSync.onDeposit(accountId, amount);
+
+    return createdDeposit?.[0] || null;
+  } finally {
+    session.endSession();
+  }
+}

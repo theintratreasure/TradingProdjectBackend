@@ -24,18 +24,18 @@ const depositSchema = new mongoose.Schema(
 
     method: {
       type: String,
-      enum: ['UPI', 'BANK', 'CRYPTO'],
+      enum: ['UPI', 'BANK', 'CRYPTO', 'MANUAL'],
       required: true
     },
 
     proof: {
       image_url: {
         type: String,
-        required: true
+        default: ""
       },
       image_public_id: {
         type: String,
-        required: true
+        default: ""
       }
     },
 

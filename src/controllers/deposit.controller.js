@@ -5,7 +5,8 @@ import {
   adminGetAllDepositsService,
   approveDepositService,
   rejectDepositService,
-  editDepositAmountService
+  editDepositAmountService,
+  adminCreateDepositService
 } from '../services/deposit.service.js';
 
 /* USER: CREATE DEPOSIT */
@@ -161,6 +162,34 @@ export async function adminEditDepositAmount(req, res) {
     });
   } catch (err) {
     return res.status(err.statusCode || 500).json({
+      success: false,
+      message: err.message
+    });
+  }
+}
+
+/* ADMIN: CREATE DEPOSIT */
+export async function adminCreateDeposit(req, res) {
+  try {
+    const { accountId, amount, method } = req.body;
+    const proof = req.body?.proof;
+
+    const deposit = await adminCreateDepositService({
+      accountId,
+      amount,
+      method,
+      proof,
+      adminId: req.user._id,
+      ipAddress: req.ip
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: 'Deposit created by admin',
+      data: deposit
+    });
+  } catch (err) {
+    return res.status(400).json({
       success: false,
       message: err.message
     });

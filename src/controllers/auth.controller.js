@@ -6,7 +6,8 @@ import {
   refreshTokenService,
   logoutService,
   verifyEmailService,
-  resendEmailVerificationService
+  resendEmailVerificationService,
+  adminChangeUserPasswordService
 } from '../services/auth.service.js';
 
 /* ================= SIGNUP ================= */
@@ -201,5 +202,26 @@ export async function logout(req, res) {
     });
   } catch (e) {
     res.status(400).json({ success: false, message: e.message });
+  }
+}
+
+/* ================= ADMIN CHANGE USER PASSWORD ================= */
+export async function adminChangeUserPassword(req, res) {
+  try {
+    const { userId } = req.params;
+    const { newPassword } = req.body;
+
+    const data = await adminChangeUserPasswordService(userId, newPassword);
+
+    return res.json({
+      success: true,
+      message: 'Password updated successfully',
+      data
+    });
+  } catch (e) {
+    return res.status(400).json({
+      success: false,
+      message: e.message
+    });
   }
 }
