@@ -2,6 +2,7 @@
 
 import { tradeEngine } from "./bootstrap.js";
 import AccountModel from "../models/Account.model.js";
+import InstrumentModel from "../models/Instrument.model.js";
 
 /**
  * EngineSync
@@ -189,6 +190,55 @@ class EngineSync {
     }
 
     console.log("[ENGINE_SYNC] reload complete:", accounts.length);
+  }
+
+  /* ===========================
+     INSTRUMENT / SYMBOL SYNC
+  ============================ */
+
+  static loadSymbolFromInstrument(instrument) {
+    if (!instrument || !instrument.code) return;
+
+    const code = String(instrument.code).toUpperCase();
+    const isTradeable = instrument.isTradeable !== false;
+
+    if (!isTradeable) {
+      tradeEngine.symbols.delete(code);
+      console.log("[ENGINE_SYNC] symbol removed (not tradeable):", code);
+      return;
+    }
+
+    tradeEngine.loadSymbol(code, {
+      contractSize: Number(instrument.contractSize) || 1,
+      maxLeverage: Number(instrument.maxLeverage) || 2000,
+      spread: Number(instrument.spread) || 0,
+      tickSize: Number(instrument.tickSize) || 0,
+      pricePrecision:
+        typeof instrument.pricePrecision === "number"
+          ? instrument.pricePrecision
+          : undefined,
+    });
+
+    console.log("[ENGINE_SYNC] symbol synced:", code);
+  }
+
+  static async syncInstrumentById(instrumentId) {
+    const instrument = await InstrumentModel.findById(instrumentId).lean();
+
+    if (!instrument) {
+      console.warn("[ENGINE_SYNC] instrument not found:", instrumentId);
+      return;
+    }
+
+    this.loadSymbolFromInstrument(instrument);
+  }
+
+  static removeInstrumentByCode(codeRaw) {
+    const code = String(codeRaw || "").trim().toUpperCase();
+    if (!code) return;
+
+    tradeEngine.symbols.delete(code);
+    console.log("[ENGINE_SYNC] symbol removed:", code);
   }
 }
 

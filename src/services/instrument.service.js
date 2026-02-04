@@ -1,5 +1,6 @@
 import redis from '../config/redis.js';
 import Instrument from '../models/Instrument.model.js';
+import EngineSync from '../trade-engine/EngineSync.js';
 
 const LIST_TTL = 300;
 const COUNT_TTL = 300;
@@ -86,6 +87,9 @@ export const createInstrumentService = async (payload) => {
 
   await redis.incr(VERSION_KEY);
 
+  // Sync symbol into trade engine (RAM)
+  EngineSync.loadSymbolFromInstrument(instrument);
+
   return instrument;
 };
 
@@ -144,6 +148,39 @@ export async function getAllInstrumentService(page, limit, segment) {
   return { data, total };
 }
 
+export async function searchInstrumentService(qRaw, segmentRaw, limitRaw) {
+  const q = String(qRaw || "").trim();
+  const segment = String(segmentRaw || "").trim().toUpperCase();
+  const limit = Math.min(Math.max(Number(limitRaw || 20), 1), 200);
+
+  if (!q) {
+    throw new Error("Search query (q) is required");
+  }
+
+  if (q.length > 50) {
+    throw new Error("Search query is too long");
+  }
+
+  const filter = {
+    $or: [
+      { code: { $regex: q, $options: "i" } },
+      { name: { $regex: q, $options: "i" } }
+    ]
+  };
+
+  if (segment && segment !== "ALL") {
+    filter.segment = segment;
+  }
+
+  const instruments = await Instrument.find(filter)
+    .sort({ code: 1 })
+    .limit(limit)
+    .select("-_id")
+    .lean();
+
+  return instruments || [];
+}
+
 
 export const updateInstrumentService = async (id, payload) => {
   const existing = await Instrument.findById(id);
@@ -197,6 +234,9 @@ export const updateInstrumentService = async (id, payload) => {
   // Cache invalidate
   await redis.incr(VERSION_KEY);
 
+  // Sync symbol into trade engine (RAM)
+  EngineSync.loadSymbolFromInstrument(updated);
+
   return updated;
 };
 
@@ -219,6 +259,9 @@ export const deleteInstrumentService = async (id) => {
 
   // Cache invalidate
   await redis.incr(VERSION_KEY);
+
+  // Remove symbol from trade engine (RAM)
+  EngineSync.removeInstrumentByCode(instrument.code);
 
   return instrument;
 };

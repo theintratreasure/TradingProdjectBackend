@@ -1,4 +1,4 @@
-import { createInstrumentService, deleteInstrumentService, getAllInstrumentService, updateInstrumentService } from '../services/instrument.service.js';
+import { createInstrumentService, deleteInstrumentService, getAllInstrumentService, searchInstrumentService, updateInstrumentService } from '../services/instrument.service.js';
 
 export const createInstrument = async (req, res) => {
   try {
@@ -41,6 +41,26 @@ export async function getInstrument(req, res) {
     });
   } catch (error) {
     res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+}
+
+export async function searchInstrument(req, res) {
+  try {
+    const q = req.query.q;
+    const segment = req.query.segment || "ALL";
+    const limit = req.query.limit || 20;
+
+    const data = await searchInstrumentService(q, segment, limit);
+
+    return res.json({
+      success: true,
+      data
+    });
+  } catch (error) {
+    return res.status(400).json({
       success: false,
       message: error.message
     });
