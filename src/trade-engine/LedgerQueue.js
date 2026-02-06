@@ -2,6 +2,7 @@ import Account from "../models/Account.model.js";
 import Trade from "../models/Trade.model.js";
 import Transaction from "../models/Transaction.model.js";
 import PendingOrder from "../models/PendingOrder.model.js";
+import Brokerage from "../models/Brokerage.model.js";
 import { engineEvents } from "./EngineEvents.js";
 
 class LedgerQueue {
@@ -77,6 +78,9 @@ class LedgerQueue {
     stopLoss,
     takeProfit,
     marginUsed,
+    spread,
+    commissionCharged,
+    swapPerDay,
   }) {
     const resolvedUserId =
       userId ||
@@ -111,6 +115,9 @@ class LedgerQueue {
       takeProfit: takeProfit ?? null,
 
       marginUsed,
+      commission: typeof commissionCharged === "number" ? commissionCharged : 0,
+      spread: typeof spread === "number" ? spread : 0,
+      swap: typeof swapPerDay === "number" ? swapPerDay : 0,
       openTime: new Date(),
       engineVersion: "ENGINE_V1",
     });
@@ -183,6 +190,17 @@ class LedgerQueue {
           ? "Trade profit credited"
           : "Trade loss debited",
       createdAt: new Date(),
+    });
+
+    await Brokerage.create({
+      user_id: trade.userId,
+      account_id: trade.accountId,
+      trade_id: trade._id,
+      symbol: trade.symbol,
+      spread: typeof trade.spread === "number" ? trade.spread : 0,
+      commission: typeof trade.commission === "number" ? trade.commission : 0,
+      swap: typeof trade.swap === "number" ? trade.swap : 0,
+      pnl,
     });
 
     console.log("[LEDGER][TRADE_CLOSE][OK]", {

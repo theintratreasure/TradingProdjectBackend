@@ -251,3 +251,55 @@ export async function adminListUsersService(query = {}) {
     }
   };
 }
+
+// admin: get single user profile by userId
+export async function adminGetUserProfileService(userId) {
+  if (!mongoose.isValidObjectId(userId)) {
+    throw new Error('Invalid userId');
+  }
+
+  const result = await User.aggregate([
+    {
+      $match: {
+        _id: new mongoose.Types.ObjectId(userId)
+      }
+    },
+    {
+      $lookup: {
+        from: 'userprofiles',
+        localField: '_id',
+        foreignField: 'user_id',
+        as: 'profile'
+      }
+    },
+    {
+      $unwind: {
+        path: '$profile',
+        preserveNullAndEmptyArrays: true
+      }
+    },
+    {
+      $project: {
+        _id: 1,
+        email: 1,
+        phone: 1,
+        name: 1,
+        userType: 1,
+        isMailVerified: 1,
+        kycStatus: 1,
+        createdAt: 1,
+
+        date_of_birth: '$profile.date_of_birth',
+        gender: '$profile.gender',
+        address_line_1: '$profile.address_line_1',
+        address_line_2: '$profile.address_line_2',
+        city: '$profile.city',
+        state: '$profile.state',
+        country: '$profile.country',
+        pincode: '$profile.pincode'
+      }
+    }
+  ]);
+
+  return result.length ? result[0] : null;
+}

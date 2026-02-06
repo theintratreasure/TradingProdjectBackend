@@ -333,6 +333,15 @@ export class Engine {
       throw new Error("Insufficient margin");
     }
 
+    // ====== Spread snapshot (for ledger/brokerage) ======
+    const appliedSpread =
+      account &&
+      account.spread_enabled &&
+      typeof sym.spread === "number" &&
+      sym.spread > 0
+        ? sym.spread
+        : 0;
+
     // ====== Commission calculation & immediate deduction ======
     // Commission is charged proportional to lots: commission_per_lot * volume
     const commissionPerLot =
@@ -393,6 +402,7 @@ export class Engine {
       stopLoss,
       takeProfit,
       marginUsed: account.usedMargin,
+      spread: appliedSpread,
       commissionCharged: position.commission,
       swapPerDay: position.swapPerDay,
       createdAt: Date.now(),

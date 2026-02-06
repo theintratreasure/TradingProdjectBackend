@@ -28,28 +28,51 @@ export async function getSymbolsService({
     const sort = {};
     sort[sortBy] = sortOrder === 'desc' ? -1 : 1;
 
-    // Execute queries in parallel for better performance
-    const [symbols, totalCount, totalSymbols, activeSymbols, inactiveSymbols, categoryAggResult] = await Promise.all([
-      Symbol.find(filter)
-        .sort(sort)
-        .skip(skip)
-        .limit(limit)
-        .lean(),
-      Symbol.countDocuments(filter),
-      Symbol.countDocuments({}),
-      Symbol.countDocuments({ isActive: true }),
-      Symbol.countDocuments({ isActive: false }),
-      Symbol.aggregate([
-        {
-          $group: {
-            _id: '$category',
-            active: { $sum: { $cond: ['$isActive', 1, 0] } },
-            inactive: { $sum: { $cond: ['$isActive', 0, 1] } },
-            total: { $sum: 1 }
-          }
+    // Single aggregate to reduce DB round-trips and keep response fast
+    const [agg] = await Symbol.aggregate([
+      {
+        $facet: {
+          symbols: [
+            { $match: filter },
+            { $sort: sort },
+            { $skip: skip },
+            { $limit: limit }
+          ],
+          totalCount: [
+            { $match: filter },
+            { $count: "count" }
+          ],
+          totalSymbols: [
+            { $count: "count" }
+          ],
+          activeSymbols: [
+            { $match: { isActive: true } },
+            { $count: "count" }
+          ],
+          inactiveSymbols: [
+            { $match: { isActive: false } },
+            { $count: "count" }
+          ],
+          categoryAggResult: [
+            {
+              $group: {
+                _id: "$category",
+                active: { $sum: { $cond: ["$isActive", 1, 0] } },
+                inactive: { $sum: { $cond: ["$isActive", 0, 1] } },
+                total: { $sum: 1 }
+              }
+            }
+          ]
         }
-      ])
+      }
     ]);
+
+    const symbols = agg?.symbols ?? [];
+    const totalCount = agg?.totalCount?.[0]?.count ?? 0;
+    const totalSymbols = agg?.totalSymbols?.[0]?.count ?? 0;
+    const activeSymbols = agg?.activeSymbols?.[0]?.count ?? 0;
+    const inactiveSymbols = agg?.inactiveSymbols?.[0]?.count ?? 0;
+    const categoryAggResult = agg?.categoryAggResult ?? [];
 
     const totalPages = Math.ceil(totalCount / limit);
     const hasNextPage = page < totalPages;

@@ -272,7 +272,7 @@ export async function adminResetTradePasswordService({
       accountNumber: account.account_number,
       accountType: account.account_type,
       planName: account.plan_name,
-      tradePassword: "UPDATED BY ADMIN",
+      tradePassword: newPassword,
       watchPassword: "UNCHANGED",
     }).catch(() => {});
   }
@@ -331,7 +331,7 @@ export async function adminResetWatchPasswordService({
       accountType: account.account_type,
       planName: account.plan_name,
       tradePassword: "UNCHANGED",
-      watchPassword: "UPDATED BY ADMIN",
+      watchPassword: newPassword,
     }).catch(() => {});
   }
 

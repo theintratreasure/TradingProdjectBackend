@@ -8,6 +8,7 @@ export async function getSymbols(req, res) {
       category,
       isActive,
       search,
+      q,
       sortBy = 'createdAt',
       sortOrder = 'desc'
     } = req.query;
@@ -20,12 +21,14 @@ export async function getSymbols(req, res) {
     const allowedSortFields = ['name', 'code', 'category', 'createdAt', 'updatedAt'];
     const sortByStr = allowedSortFields.includes(sortBy) ? sortBy : 'createdAt';
 
+    const searchQuery = search ?? q;
+
     const result = await getSymbolsService({
       page: pageNum,
       limit: limitNum,
       category,
       isActive: isActiveBool,
-      search,
+      search: searchQuery,
       sortBy: sortByStr,
       sortOrder: sortOrderStr
     });

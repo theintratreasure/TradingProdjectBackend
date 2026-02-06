@@ -1,5 +1,5 @@
 import UserDevice from '../models/UserDevice.model.js';
-import { adminListUsersService, adminUpdateUserService, getMyProfileService, updateMyProfileService, searchUsersService } from '../services/user.service.js';
+import { adminGetUserProfileService, adminListUsersService, adminUpdateUserService, getMyProfileService, updateMyProfileService, searchUsersService } from '../services/user.service.js';
 
 export async function getMyProfile(req, res) {
   const data = await getMyProfileService(req.user._id);
@@ -144,5 +144,30 @@ export async function adminListUsers(req, res) {
     });
   }
 }
+
+export async function adminGetUserProfile(req, res) {
+  try {
+    const { userId } = req.params;
+    const data = await adminGetUserProfileService(userId);
+
+    if (!data) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    return res.json({
+      success: true,
+      data
+    });
+  } catch (err) {
+    return res.status(400).json({
+      success: false,
+      message: err.message
+    });
+  }
+}
+
 
 

@@ -139,6 +139,12 @@ const TradeSchema = new mongoose.Schema(
       default: 0,
     },
 
+    /** spread applied at entry (points/pips, from symbol) */
+    spread: {
+      type: Number,
+      default: 0,
+    },
+
     /** overnight swap (+ / -) */
     swap: {
       type: Number,
