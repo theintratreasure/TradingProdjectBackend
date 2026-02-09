@@ -13,7 +13,8 @@ app.use(
       'http://localhost:3001',
       'https://trade-portal-uiub.vercel.app',
       'https://admin-dashboard-wheat-pi-59.vercel.app',
-      'http://localhost:5173'
+      'http://localhost:5173',
+      
     ],
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
     allowedHeaders: ['Content-Type', 'Authorization'],
