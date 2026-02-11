@@ -1,6 +1,7 @@
 import Trade from "../models/Trade.model.js";
 import PendingOrder from "../models/PendingOrder.model.js";
 import User from "../models/User.model.js";
+import Account from "../models/Account.model.js";
 import mongoose from "mongoose";
 import Brokerage from "../models/Brokerage.model.js";
 
@@ -52,6 +53,191 @@ export const getTradeAdminSummaryService = async () => {
     activeTradingAccounts: Array.isArray(activeTradingAccountIds)
       ? activeTradingAccountIds.length
       : 0
+  };
+};
+
+export const adminListUsersFundsService = async (query = {}) => {
+  const pageRaw = Number(query.page);
+  const limitRaw = Number(query.limit);
+
+  const page = Number.isFinite(pageRaw) && pageRaw > 0 ? pageRaw : 1;
+  const limit =
+    Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 100) : 20;
+  const skip = (page - 1) * limit;
+
+  const escapeRegex = (s) =>
+    String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  const match = {};
+
+  if (typeof query.userId === "string" && query.userId.trim()) {
+    if (!mongoose.isValidObjectId(query.userId)) {
+      throw new Error("Invalid userId");
+    }
+    match._id = new mongoose.Types.ObjectId(query.userId);
+  }
+
+  const q = String(query.q || "").trim();
+  if (q) {
+    const rx = new RegExp(escapeRegex(q), "i");
+    match.$or = [{ name: rx }, { email: rx }, { phone: rx }];
+  }
+
+  if (typeof query.userType === "string" && query.userType.trim()) {
+    const userType = query.userType.trim().toUpperCase();
+    if (!["USER", "ADMIN"].includes(userType)) {
+      throw new Error("Invalid userType. Allowed: USER, ADMIN");
+    }
+    match.userType = userType;
+  }
+
+  if (typeof query.isMailVerified === "string") {
+    if (query.isMailVerified === "true") match.isMailVerified = true;
+    if (query.isMailVerified === "false") match.isMailVerified = false;
+  }
+
+  if (typeof query.kycStatus === "string" && query.kycStatus.trim()) {
+    const kycStatus = query.kycStatus.trim().toUpperCase();
+    if (!["NOT_STARTED", "PENDING", "VERIFIED", "REJECTED"].includes(kycStatus)) {
+      throw new Error("Invalid kycStatus");
+    }
+    match.kycStatus = kycStatus;
+  }
+
+  const sortDirRaw =
+    typeof query.sortDir === "string" ? query.sortDir.trim().toLowerCase() : "";
+  const sortDir = sortDirRaw === "asc" ? 1 : -1;
+
+  const sortByRaw =
+    typeof query.sortBy === "string" ? query.sortBy.trim() : "";
+  const sortBy = ["createdAt", "updatedAt", "name", "email"].includes(sortByRaw)
+    ? sortByRaw
+    : "createdAt";
+
+  const accountTypeRaw = String(query.account_type ?? query.accountType ?? "")
+    .trim()
+    .toLowerCase();
+  const statusRaw = String(query.status ?? query.accountStatus ?? "")
+    .trim()
+    .toLowerCase();
+  const currencyRaw = String(query.currency || "").trim();
+
+  const accountMatch = {
+    $expr: { $eq: ["$user_id", "$$userId"] },
+  };
+
+  if (accountTypeRaw) {
+    if (!["demo", "live"].includes(accountTypeRaw)) {
+      throw new Error("Invalid accountType (demo|live)");
+    }
+    accountMatch.account_type = accountTypeRaw;
+  }
+
+  if (statusRaw) {
+    if (!["active", "disabled"].includes(statusRaw)) {
+      throw new Error("Invalid status (active|disabled)");
+    }
+    accountMatch.status = statusRaw;
+  }
+
+  if (currencyRaw) {
+    accountMatch.currency = currencyRaw.toUpperCase();
+  }
+
+  const pipeline = [
+    { $match: match },
+    { $sort: { [sortBy]: sortDir, _id: sortDir } },
+    {
+      $facet: {
+        items: [
+          { $skip: skip },
+          { $limit: limit },
+          {
+            $lookup: {
+              from: Account.collection.name,
+              let: { userId: "$_id" },
+              pipeline: [
+                { $match: accountMatch },
+                {
+                  $group: {
+                    _id: null,
+                    accountsCount: { $sum: 1 },
+                    totalBalance: { $sum: "$balance" },
+                    totalHoldBalance: { $sum: "$hold_balance" },
+                    totalEquity: { $sum: "$equity" },
+                  },
+                },
+                {
+                  $project: {
+                    _id: 0,
+                    accountsCount: 1,
+                    totalBalance: 1,
+                    totalHoldBalance: 1,
+                    totalEquity: 1,
+                    totalFreeBalance: {
+                      $subtract: ["$totalBalance", "$totalHoldBalance"],
+                    },
+                  },
+                },
+              ],
+              as: "funds",
+            },
+          },
+          {
+            $addFields: {
+              funds: {
+                $ifNull: [
+                  { $arrayElemAt: ["$funds", 0] },
+                  {
+                    accountsCount: 0,
+                    totalBalance: 0,
+                    totalHoldBalance: 0,
+                    totalFreeBalance: 0,
+                    totalEquity: 0,
+                  },
+                ],
+              },
+            },
+          },
+          {
+            $project: {
+              _id: 1,
+              name: 1,
+              email: 1,
+              phone: 1,
+              userType: 1,
+              isMailVerified: 1,
+              kycStatus: 1,
+              createdAt: 1,
+              updatedAt: 1,
+              funds: 1,
+            },
+          },
+        ],
+        meta: [{ $count: "total" }],
+      },
+    },
+    {
+      $addFields: {
+        total: { $ifNull: [{ $arrayElemAt: ["$meta.total", 0] }, 0] },
+      },
+    },
+    { $project: { items: 1, total: 1 } },
+  ];
+
+  const agg = await User.aggregate(pipeline).allowDiskUse(true);
+  const row = agg?.[0] || { items: [], total: 0 };
+  const totalRaw = Number(row.total);
+  const total = Number.isFinite(totalRaw) ? totalRaw : 0;
+
+  return {
+    items: Array.isArray(row.items) ? row.items : [],
+    pagination: {
+      page,
+      limit,
+      total,
+      totalPages: total === 0 ? 0 : Math.ceil(total / limit),
+    },
   };
 };
 
@@ -214,6 +400,360 @@ export const adminListClosedTradesService = async (query = {}) => {
   ];
 
   const agg = await Trade.aggregate(pipeline).allowDiskUse(true);
+  const row = agg?.[0] || { items: [], total: 0 };
+  const totalRaw = Number(row.total);
+  const total = Number.isFinite(totalRaw) ? totalRaw : 0;
+
+  return {
+    items: Array.isArray(row.items) ? row.items : [],
+    pagination: {
+      page,
+      limit,
+      total,
+      totalPages: total === 0 ? 0 : Math.ceil(total / limit),
+    },
+  };
+};
+
+export const adminListOpenTradesService = async (query = {}) => {
+  const pageRaw = Number(query.page);
+  const limitRaw = Number(query.limit);
+
+  const page = Number.isFinite(pageRaw) && pageRaw > 0 ? pageRaw : 1;
+  const limit =
+    Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 100) : 20;
+  const skip = (page - 1) * limit;
+
+  if (typeof query.status === "string" && query.status.trim()) {
+    const status = query.status.trim().toUpperCase();
+    if (status !== "OPEN") {
+      throw new Error("Invalid status. Allowed: OPEN");
+    }
+  }
+
+  const match = {
+    status: "OPEN",
+  };
+
+  if (query.userId !== undefined) {
+    if (!mongoose.isValidObjectId(query.userId)) {
+      throw new Error("Invalid userId");
+    }
+    match.userId = new mongoose.Types.ObjectId(query.userId);
+  }
+
+  if (query.accountId !== undefined) {
+    if (!mongoose.isValidObjectId(query.accountId)) {
+      throw new Error("Invalid accountId");
+    }
+    match.accountId = new mongoose.Types.ObjectId(query.accountId);
+  }
+
+  if (typeof query.positionId === "string" && query.positionId.trim()) {
+    match.positionId = query.positionId.trim();
+  }
+
+  if (typeof query.symbol === "string" && query.symbol.trim()) {
+    match.symbol = query.symbol.trim().toUpperCase();
+  }
+
+  if (typeof query.side === "string" && query.side.trim()) {
+    const side = query.side.trim().toUpperCase();
+    if (!TRADE_SIDES.has(side)) {
+      throw new Error("Invalid side. Allowed: BUY, SELL");
+    }
+    match.side = side;
+  }
+
+  if (typeof query.orderType === "string" && query.orderType.trim()) {
+    const orderType = query.orderType.trim().toUpperCase();
+    if (!TRADE_ORDER_TYPES.has(orderType)) {
+      throw new Error(
+        "Invalid orderType. Allowed: MARKET, BUY_LIMIT, SELL_LIMIT, BUY_STOP, SELL_STOP",
+      );
+    }
+    match.orderType = orderType;
+  } else if (typeof query.orderKind === "string" && query.orderKind.trim()) {
+    const orderKind = query.orderKind.trim().toUpperCase();
+    const mappedTypes = TRADE_ORDER_KIND_TO_TYPES[orderKind];
+    if (!mappedTypes) {
+      throw new Error("Invalid orderKind. Allowed: MARKET, LIMIT, STOP");
+    }
+    match.orderType = { $in: mappedTypes };
+  }
+
+  const timeFieldRaw =
+    typeof query.timeField === "string" ? query.timeField.trim() : "";
+  const timeField = ["openTime", "createdAt", "updatedAt"].includes(timeFieldRaw)
+    ? timeFieldRaw
+    : "openTime";
+
+  const from = typeof query.from === "string" ? new Date(query.from) : null;
+  const to = typeof query.to === "string" ? new Date(query.to) : null;
+  const fromValid = from instanceof Date && !Number.isNaN(from.getTime());
+  const toValid = to instanceof Date && !Number.isNaN(to.getTime());
+
+  if (query.from && !fromValid) {
+    throw new Error("Invalid from date");
+  }
+  if (query.to && !toValid) {
+    throw new Error("Invalid to date");
+  }
+
+  if (fromValid || toValid) {
+    match[timeField] = {};
+    if (fromValid) match[timeField].$gte = from;
+    if (toValid) match[timeField].$lte = to;
+  }
+
+  const sortDirRaw =
+    typeof query.sortDir === "string" ? query.sortDir.trim().toLowerCase() : "";
+  const sortDir = sortDirRaw === "asc" ? 1 : -1;
+  const sortByRaw =
+    typeof query.sortBy === "string" ? query.sortBy.trim() : "";
+  const sortBy = ["openTime", "createdAt", "updatedAt"].includes(sortByRaw)
+    ? sortByRaw
+    : timeField;
+
+  const pipeline = [
+    { $match: match },
+    {
+      $facet: {
+        items: [
+          { $sort: { [sortBy]: sortDir, _id: sortDir } },
+          { $skip: skip },
+          { $limit: limit },
+          {
+            $project: {
+              _id: 1,
+              userId: 1,
+              accountId: 1,
+              ipAddress: 1,
+
+              positionId: 1,
+              symbol: 1,
+              side: 1,
+              orderType: 1,
+              status: 1,
+
+              volume: 1,
+              contractSize: 1,
+              leverage: 1,
+              openPrice: 1,
+              entryPrice: 1,
+              closePrice: 1,
+
+              stopLoss: 1,
+              takeProfit: 1,
+
+              marginUsed: 1,
+              grossPnL: 1,
+              commission: 1,
+              spread: 1,
+              swap: 1,
+              realizedPnL: 1,
+
+              openTime: 1,
+              closeTime: 1,
+              closeReason: 1,
+
+              engineVersion: 1,
+
+              createdAt: 1,
+              updatedAt: 1,
+            },
+          },
+        ],
+        meta: [{ $count: "total" }],
+      },
+    },
+    {
+      $addFields: {
+        total: { $ifNull: [{ $arrayElemAt: ["$meta.total", 0] }, 0] },
+      },
+    },
+    {
+      $project: {
+        items: 1,
+        total: 1,
+      },
+    },
+  ];
+
+  const agg = await Trade.aggregate(pipeline).allowDiskUse(true);
+  const row = agg?.[0] || { items: [], total: 0 };
+  const totalRaw = Number(row.total);
+  const total = Number.isFinite(totalRaw) ? totalRaw : 0;
+
+  return {
+    items: Array.isArray(row.items) ? row.items : [],
+    pagination: {
+      page,
+      limit,
+      total,
+      totalPages: total === 0 ? 0 : Math.ceil(total / limit),
+    },
+  };
+};
+
+export const adminListPendingOrdersOpenService = async (query = {}) => {
+  const pageRaw = Number(query.page);
+  const limitRaw = Number(query.limit);
+
+  const page = Number.isFinite(pageRaw) && pageRaw > 0 ? pageRaw : 1;
+  const limit =
+    Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 100) : 20;
+  const skip = (page - 1) * limit;
+
+  if (typeof query.status === "string" && query.status.trim()) {
+    const status = query.status.trim().toUpperCase();
+    if (status !== "PENDING") {
+      throw new Error("Invalid status. Allowed: PENDING");
+    }
+  }
+
+  const match = {
+    status: "PENDING",
+  };
+
+  if (query.userId !== undefined) {
+    if (!mongoose.isValidObjectId(query.userId)) {
+      throw new Error("Invalid userId");
+    }
+    match.userId = new mongoose.Types.ObjectId(query.userId);
+  }
+
+  if (query.accountId !== undefined) {
+    if (!mongoose.isValidObjectId(query.accountId)) {
+      throw new Error("Invalid accountId");
+    }
+    match.accountId = new mongoose.Types.ObjectId(query.accountId);
+  }
+
+  if (typeof query.orderId === "string" && query.orderId.trim()) {
+    match.orderId = query.orderId.trim();
+  }
+
+  if (typeof query.symbol === "string" && query.symbol.trim()) {
+    match.symbol = query.symbol.trim().toUpperCase();
+  }
+
+  if (typeof query.side === "string" && query.side.trim()) {
+    const side = query.side.trim().toUpperCase();
+    if (!TRADE_SIDES.has(side)) {
+      throw new Error("Invalid side. Allowed: BUY, SELL");
+    }
+    match.side = side;
+  }
+
+  if (typeof query.orderType === "string" && query.orderType.trim()) {
+    const orderType = query.orderType.trim().toUpperCase();
+    if (!PENDING_ORDER_TYPES.has(orderType)) {
+      throw new Error(
+        "Invalid orderType. Allowed: BUY_LIMIT, SELL_LIMIT, BUY_STOP, SELL_STOP",
+      );
+    }
+    match.orderType = orderType;
+  } else if (typeof query.orderKind === "string" && query.orderKind.trim()) {
+    const orderKind = query.orderKind.trim().toUpperCase();
+    const mappedTypes = PENDING_ORDER_KIND_TO_TYPES[orderKind];
+    if (!mappedTypes) {
+      throw new Error("Invalid orderKind. Allowed: LIMIT, STOP");
+    }
+    match.orderType = { $in: mappedTypes };
+  }
+
+  const timeFieldRaw =
+    typeof query.timeField === "string" ? query.timeField.trim() : "";
+  const timeField = ["createdAt", "updatedAt", "expireAt"].includes(timeFieldRaw)
+    ? timeFieldRaw
+    : "createdAt";
+
+  const from = typeof query.from === "string" ? new Date(query.from) : null;
+  const to = typeof query.to === "string" ? new Date(query.to) : null;
+  const fromValid = from instanceof Date && !Number.isNaN(from.getTime());
+  const toValid = to instanceof Date && !Number.isNaN(to.getTime());
+
+  if (query.from && !fromValid) {
+    throw new Error("Invalid from date");
+  }
+  if (query.to && !toValid) {
+    throw new Error("Invalid to date");
+  }
+
+  if (fromValid || toValid) {
+    match[timeField] = {};
+    if (fromValid) match[timeField].$gte = from;
+    if (toValid) match[timeField].$lte = to;
+  }
+
+  const sortDirRaw =
+    typeof query.sortDir === "string" ? query.sortDir.trim().toLowerCase() : "";
+  const sortDir = sortDirRaw === "asc" ? 1 : -1;
+  const sortByRaw =
+    typeof query.sortBy === "string" ? query.sortBy.trim() : "";
+  const sortBy = ["createdAt", "updatedAt", "expireAt"].includes(sortByRaw)
+    ? sortByRaw
+    : timeField;
+
+  const pipeline = [
+    { $match: match },
+    {
+      $facet: {
+        items: [
+          { $sort: { [sortBy]: sortDir, _id: sortDir } },
+          { $skip: skip },
+          { $limit: limit },
+          {
+            $project: {
+              _id: 1,
+              userId: 1,
+              accountId: 1,
+
+              orderId: 1,
+              executedPositionId: 1,
+
+              symbol: 1,
+              side: 1,
+              orderType: 1,
+
+              price: 1,
+              volume: 1,
+
+              stopLoss: 1,
+              takeProfit: 1,
+
+              status: 1,
+              executedAt: 1,
+              cancelledAt: 1,
+              expireAt: 1,
+              failReason: 1,
+              failedAt: 1,
+
+              engineVersion: 1,
+
+              createdAt: 1,
+              updatedAt: 1,
+            },
+          },
+        ],
+        meta: [{ $count: "total" }],
+      },
+    },
+    {
+      $addFields: {
+        total: { $ifNull: [{ $arrayElemAt: ["$meta.total", 0] }, 0] },
+      },
+    },
+    {
+      $project: {
+        items: 1,
+        total: 1,
+      },
+    },
+  ];
+
+  const agg = await PendingOrder.aggregate(pipeline).allowDiskUse(true);
   const row = agg?.[0] || { items: [], total: 0 };
   const totalRaw = Number(row.total);
   const total = Number.isFinite(totalRaw) ? totalRaw : 0;

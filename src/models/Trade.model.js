@@ -215,6 +215,7 @@ TradeSchema.index({ symbol: 1, status: 1 });
 TradeSchema.index({ orderType: 1, status: 1 });
 TradeSchema.index({ positionId: 1 });
 TradeSchema.index({ openTime: -1 });
+TradeSchema.index({ status: 1, openTime: -1 });
 TradeSchema.index({ status: 1, closeTime: -1 });
 
 const Trade = mongoose.model("Trade", TradeSchema);

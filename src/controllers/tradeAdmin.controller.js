@@ -4,7 +4,10 @@ import { tradeEngine } from "../trade-engine/bootstrap.js";
 import {
   adminListBrokerageService,
   adminListClosedTradesService,
+  adminListOpenTradesService,
   adminListPendingOrdersHistoryService,
+  adminListPendingOrdersOpenService,
+  adminListUsersFundsService,
   getTradeAdminSummaryService,
 } from "../services/tradeAdmin.service.js";
 
@@ -140,9 +143,60 @@ export const adminListBrokerage = async (req, res) => {
   }
 };
 
+export const adminListUsersFunds = async (req, res) => {
+  try {
+    const result = await adminListUsersFundsService(req.query);
+
+    return res.json({
+      success: true,
+      data: result.items,
+      pagination: result.pagination,
+    });
+  } catch (error) {
+    return res.status(400).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+export const adminListOpenTrades = async (req, res) => {
+  try {
+    const result = await adminListOpenTradesService(req.query);
+
+    return res.json({
+      success: true,
+      data: result.items,
+      pagination: result.pagination,
+    });
+  } catch (error) {
+    return res.status(400).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
 export const adminListClosedTrades = async (req, res) => {
   try {
     const result = await adminListClosedTradesService(req.query);
+
+    return res.json({
+      success: true,
+      data: result.items,
+      pagination: result.pagination,
+    });
+  } catch (error) {
+    return res.status(400).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+export const adminListPendingOrdersOpen = async (req, res) => {
+  try {
+    const result = await adminListPendingOrdersOpenService(req.query);
 
     return res.json({
       success: true,
