@@ -145,6 +145,7 @@ PendingOrderSchema.index({ userId: 1, createdAt: -1 });
 PendingOrderSchema.index({ symbol: 1, status: 1 });
 PendingOrderSchema.index({ orderType: 1, status: 1 });
 PendingOrderSchema.index({ expireAt: 1 });
+PendingOrderSchema.index({ status: 1, createdAt: -1 });
 
 const PendingOrder = mongoose.model("PendingOrder", PendingOrderSchema);
 export default PendingOrder;
