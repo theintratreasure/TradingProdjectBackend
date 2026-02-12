@@ -73,6 +73,20 @@ const AccountSchema = new mongoose.Schema(
     swap_charge: {
       type: Number,
       default: 0,
+      min: 0,
+    },
+
+    // SWAP ROLLOVER (CRON) - idempotency markers
+    // Used to ensure overnight swap is charged once per day per account.
+    swap_last_charged_ymd: {
+      type: String, // YYYY-MM-DD (cron timezone)
+      default: null,
+      index: true,
+    },
+
+    swap_last_charged_at: {
+      type: Date,
+      default: null,
     },
 
     // FINANCIALS

@@ -24,6 +24,7 @@ const TransactionSchema = new mongoose.Schema(
         "WITHDRAWAL",
         "TRADE_PROFIT",
         "TRADE_LOSS",
+        "SWAP",
         "BONUS",
         "REFERRAL",
         "ADJUSTMENT",
@@ -44,6 +45,13 @@ const TransactionSchema = new mongoose.Schema(
       type: Number,
       required: true,
       min: 0,
+    },
+
+    // OPTIONAL: equity snapshot after this transaction
+    equityAfter: {
+      type: Number,
+      min: 0,
+      default: null,
     },
     //  TRANSACTION STATUS
     status: {

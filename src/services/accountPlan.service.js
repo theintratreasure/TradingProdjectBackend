@@ -60,7 +60,7 @@ function normalizePlanData(data) {
     // ✅ SWAP CHARGE
     swap_charge:
       typeof data.swap_charge === 'number'
-        ? data.swap_charge
+        ? Math.abs(data.swap_charge)
         : 0,
 
     // ✅ SWAP ENABLE

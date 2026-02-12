@@ -6,6 +6,7 @@ import app from "./app.js";
 
 import { connectDB } from "./config/database.js";
 import { startMarketCron } from "./jobs/market.cron.js";
+import { startSwapCron } from "./jobs/swap.cron.js";
 import { attachMarketWS } from "./ws/market.js";
 import { MarketSchedule } from "./models/MarketSchedule.model.js";
 import { marketService } from "./services/market.service.js";
@@ -18,8 +19,8 @@ import Instrument from "./models/Instrument.model.js";
 const PORT = Number(process.env.PORT || 4000);
 
 console.log("ENV CHECK:", {
-  JWT_SECRET: process.env.JWT_SECRET,
-  ACCOUNT_JWT_SECRET: process.env.ACCOUNT_JWT_SECRET,
+  JWT_SECRET: Boolean(process.env.JWT_SECRET),
+  ACCOUNT_JWT_SECRET: Boolean(process.env.ACCOUNT_JWT_SECRET),
 });
 
 async function start() {
@@ -115,6 +116,7 @@ const symbols = await Instrument.find(
     console.log(`Server running at http://localhost:${PORT}`);
     console.log(`WebSocket Market WS at ws://localhost:${PORT}/ws/market`);
     startMarketCron();
+    startSwapCron();
   });
 }
 

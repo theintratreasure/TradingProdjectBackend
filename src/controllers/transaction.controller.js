@@ -1,4 +1,8 @@
-import { getAdminUserTransactionHistoryService, getUserTransactionHistoryService } from '../services/transaction.service.js';
+import {
+  adminListSwapDeductionsService,
+  getAdminUserTransactionHistoryService,
+  getUserTransactionHistoryService
+} from '../services/transaction.service.js';
 
 /**
  * GET USER TRANSACTION HISTORY
@@ -88,6 +92,29 @@ export async function adminGetUserTransactionHistory(req, res) {
     return res.status(400).json({
       success: false,
       message: error.message
+    });
+  }
+}
+
+/**
+ * ADMIN: LIST SWAP DEDUCTIONS (GLOBAL)
+ * GET /api/v1/transactions/admin/swap
+ */
+export async function adminListSwapDeductions(req, res) {
+  try {
+    const result = await adminListSwapDeductionsService({ query: req.query });
+
+    return res.json({
+      success: true,
+      message: 'Swap deductions fetched successfully',
+      data: result.data,
+      summary: result.summary,
+      pagination: result.pagination
+    });
+  } catch (error) {
+    return res.status(400).json({
+      success: false,
+      message: error?.message || 'Failed to fetch swap deductions'
     });
   }
 }

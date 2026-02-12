@@ -428,8 +428,11 @@ export class Engine {
 
     // ====== Swap calculation (per day per lot) ======
     // Do NOT deduct here — cronjob will handle real deduction. We only compute & expose.
-    const swapPerLot =
+    // NOTE: In this system swap is always a DEBIT (never credit).
+    // We enforce non-negative swap-per-lot here so the stored Trade.swap is always >= 0.
+    const swapPerLotRaw =
       typeof account.swap_charge === "number" ? account.swap_charge : 0;
+    const swapPerLot = Math.abs(Number(swapPerLotRaw) || 0);
     const swapPerDay = Number((swapPerLot * position.volume).toFixed(8));
     position.swapPerDay = swapPerDay;
 

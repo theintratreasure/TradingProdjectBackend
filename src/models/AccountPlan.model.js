@@ -68,7 +68,8 @@ const AccountPlanSchema = new mongoose.Schema(
     // ✅ SINGLE SWAP CHARGE (Buy/Sell Same)
     swap_charge: {
       type: Number,
-      default: 0 // per lot per day
+      default: 0, // per lot per day
+      min: 0
     },
 
     // ✅ REFERRAL REWARD AMOUNT

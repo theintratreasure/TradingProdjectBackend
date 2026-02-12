@@ -97,7 +97,7 @@ export async function createAccount({ userId, account_plan_id, account_type }) {
 
   const swapCharge =
     typeof plan.swap_charge === "number"
-      ? plan.swap_charge
+      ? Math.abs(plan.swap_charge)
       : 0;
 
   /* ================= CREATE ================= */
