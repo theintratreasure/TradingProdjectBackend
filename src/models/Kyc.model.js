@@ -10,25 +10,35 @@ const kycSchema = new mongoose.Schema(
       index: true
     },
 
+    // Who created/updated this KYC record
+    // USER: submitted by user with documents
+    // ADMIN: created/overridden by admin (documents may be empty)
+    source: {
+      type: String,
+      enum: ['USER', 'ADMIN'],
+      default: 'USER',
+      index: true
+    },
+
     documentType: {
       type: String,
       enum: ['NIC', 'PASSPORT', 'DRIVING_LICENSE', 'ELECTRICITY_BILL'],
-      required: true,
+      required: false,
       index: true
     },
 
     documents: {
       front: {
-        image_url: { type: String, required: true },
-        image_public_id: { type: String, required: true }
+        image_url: { type: String, default: '' },
+        image_public_id: { type: String, default: '' }
       },
       back: {
-        image_url: { type: String, default: '', required: true },
+        image_url: { type: String, default: '' },
         image_public_id: { type: String, default: '' }
       },
       selfie: {
-        image_url: { type: String, required: true },
-        image_public_id: { type: String, required: true }
+        image_url: { type: String, default: '' },
+        image_public_id: { type: String, default: '' }
       }
     },
 

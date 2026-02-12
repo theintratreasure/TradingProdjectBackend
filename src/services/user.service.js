@@ -213,26 +213,32 @@ export async function adminUpdateUserService(userId, payload = {}) {
           await Kyc.deleteOne({ user: userId }, { session });
           updatedKyc = null;
         } else {
-          const kycDoc = await Kyc.findOne({ user: userId }).session(session);
+          const reason =
+            next === 'REJECTED'
+              ? String(kycRejectionReason || 'Rejected by admin').trim()
+              : '';
 
-          if (!kycDoc) {
-            throw new Error(
-              'KYC record not found. User must submit KYC documents first.'
-            );
-          }
-
-          if (next === 'REJECTED') {
-            const reason = String(kycRejectionReason || '').trim();
-            if (!reason) {
-              throw new Error('KYC rejection reason is required');
-            }
-            kycDoc.rejectionReason = reason;
-          } else {
-            kycDoc.rejectionReason = '';
-          }
-
-          kycDoc.status = next;
-          updatedKyc = await kycDoc.save({ session });
+          // If KYC record doesn't exist, create it (admin override).
+          // Documents may be empty in this case, but status will be consistent with User.kycStatus.
+          updatedKyc = await Kyc.findOneAndUpdate(
+            { user: userId },
+            {
+              $set: {
+                status: next,
+                rejectionReason: reason
+              },
+              $setOnInsert: {
+                user: userId,
+                source: 'ADMIN',
+                documents: {
+                  front: { image_url: '', image_public_id: '' },
+                  back: { image_url: '', image_public_id: '' },
+                  selfie: { image_url: '', image_public_id: '' }
+                }
+              }
+            },
+            { new: true, upsert: true, runValidators: true, session }
+          ).lean();
         }
       }
 
@@ -250,7 +256,7 @@ export async function adminUpdateUserService(userId, payload = {}) {
     return {
       user: updatedUser,
       profile: updatedProfile,
-      kyc: updatedKyc ? updatedKyc.toObject?.() || updatedKyc : updatedKyc
+      kyc: updatedKyc
     };
   } finally {
     session.endSession();

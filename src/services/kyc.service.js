@@ -24,8 +24,15 @@ export async function submitKycService(userId, payload) {
     throw new Error('Invalid document type');
   }
 
-  if (!payload.documents?.front || !payload.documents?.selfie) {
-    throw new Error('Front image and selfie are mandatory');
+  const front = payload.documents?.front;
+  const selfie = payload.documents?.selfie;
+
+  if (!front?.image_url || !front?.image_public_id) {
+    throw new Error('Front document image is mandatory');
+  }
+
+  if (!selfie?.image_url || !selfie?.image_public_id) {
+    throw new Error('Selfie image is mandatory');
   }
 
   const oldKyc = await KycModel.findOne({ user: userId });
@@ -61,6 +68,7 @@ export async function submitKycService(userId, payload) {
   /* ===== CREATE NEW KYC ===== */
   const kyc = await KycModel.create({
     user: userId,
+    source: 'USER',
     documentType: payload.documentType,
     documents: payload.documents,
     status: 'PENDING',
