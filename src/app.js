@@ -8,22 +8,42 @@ app.disable('x-powered-by');
 
 app.use(
   cors({
-origin: [
-  "http://localhost:3000",
-  "http://localhost:3001",
-  "https://trade-portal-uiub.vercel.app",
-  "https://admin-dashboard-wheat-pi-59.vercel.app",
-  "http://localhost:5173",
-  "https://alstrades.com",
-  "https://admin.alstrades.com",
-  "https://user.alstrades.com",
-],
+    origin: function (origin, callback) {
+      if (!origin) return callback(null, true);
 
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+      const allowedOrigins = [
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://localhost:5173",
+        "http://localhost",
+        "capacitor://localhost",
+        "https://trade-portal-uiub.vercel.app",
+        "https://admin-dashboard-wheat-pi-59.vercel.app",
+        "https://alstrades.com",
+        "https://www.alstrades.com",
+        "https://admin.alstrades.com",
+        "https://user.alstrades.com"
+      ];
+
+      if (allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        console.log("Blocked by CORS:", origin);
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "Cache-Control",
+      "Pragma"
+    ],
     credentials: true
   })
 );
+
+app.options("*", cors());
 
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: false }));
