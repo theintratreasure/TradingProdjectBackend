@@ -87,11 +87,24 @@ const computeMarketState = (schedule) => {
   const closeMin = toMinutes(closeTime);
   const nowMin = getNowMinutes(tz);
 
-  const isOpen = nowMin >= openMin && nowMin <= closeMin;
+  // Support sessions that cross midnight.
+  // Examples:
+  // - Normal: 09:15 -> 15:30 (openMin < closeMin)
+  // - Overnight: 09:15 -> 00:15 (openMin > closeMin)
+  // - 24h: 00:00 -> 00:00 (openMin === closeMin)
+  let isOpen;
+  if (openMin === closeMin) {
+    isOpen = true; // treat as 24h session
+  } else if (openMin < closeMin) {
+    isOpen = nowMin >= openMin && nowMin <= closeMin;
+  } else {
+    // crosses midnight: open from openMin..23:59 OR 00:00..closeMin
+    isOpen = nowMin >= openMin || nowMin <= closeMin;
+  }
 
   return {
     isMarketOpen: isOpen,
-    reason: isOpen ? 'OPEN_TIME_WINDOW' : 'OUTSIDE_HOURS',
+    reason: isOpen ? (openMin === closeMin ? 'OPEN_24H' : 'OPEN_TIME_WINDOW') : 'OUTSIDE_HOURS',
     openTime,
     closeTime,
   };
