@@ -4,6 +4,9 @@ import { marketService } from '../services/market.service.js';
 import { tradeEngine } from '../trade-engine/bootstrap.js';
 
 export const startMarketCron = () => {
+  // Track changes to avoid noisy logs every minute.
+  const lastBySegment = new Map(); // seg -> { isMarketOpen, reason, openTime, closeTime, timezone }
+
   const run = async () => {
     try {
       // Collect segments from DB schedules + currently loaded engine symbols.
@@ -24,6 +27,33 @@ export const startMarketCron = () => {
         if (res?.data) {
           // Keep an in-process snapshot for ultra-fast checks inside trade-engine (no Redis on order path).
           tradeEngine.setMarketStatus(res.data.segment, res.data);
+
+          // Log only when status changes (open/close/reason/timing).
+          const prev = lastBySegment.get(res.data.segment);
+          const next = {
+            isMarketOpen: res.data.isMarketOpen,
+            reason: res.data.reason,
+            openTime: res.data.openTime,
+            closeTime: res.data.closeTime,
+            timezone: res.data.timezone,
+          };
+
+          const changed =
+            !prev ||
+            prev.isMarketOpen !== next.isMarketOpen ||
+            prev.reason !== next.reason ||
+            prev.openTime !== next.openTime ||
+            prev.closeTime !== next.closeTime ||
+            prev.timezone !== next.timezone;
+
+          if (changed) {
+            console.log('[MARKET_CRON] status:', {
+              segment: res.data.segment,
+              ...next,
+              lastCheckedAt: res.data.lastCheckedAt,
+            });
+            lastBySegment.set(res.data.segment, next);
+          }
         }
       }
     } catch (err) {

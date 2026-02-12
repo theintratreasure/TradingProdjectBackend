@@ -32,7 +32,12 @@ export const updateMarketSchedule = async (req, res) => {
 export const getMarketStatus = async (req, res) => {
   const { segment } = req.params;
 
-  const result = await marketService.getMarketStatus(segment);
+  const debugRaw = String(req.query?.debug || '').trim().toLowerCase();
+  const debug = debugRaw === '1' || debugRaw === 'true' || debugRaw === 'yes';
+
+  const result = debug
+    ? await marketService.refreshMarketStatus(segment, { debug: true })
+    : await marketService.getMarketStatus(segment);
   if (result.error) return res.status(result.error.status).json(result.error);
 
   return res.json(result.data);

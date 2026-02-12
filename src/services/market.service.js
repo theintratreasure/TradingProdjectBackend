@@ -37,10 +37,6 @@ const getNowInTimeZone = (timeZone) => {
 
 const getTodayYYYYMMDD = (timeZone) => getNowInTimeZone(timeZone).format('YYYY-MM-DD');
 const getTodayDayName = (timeZone) => getNowInTimeZone(timeZone).format('dddd').toUpperCase();
-const getNowMinutes = (timeZone) => {
-  const now = getNowInTimeZone(timeZone);
-  return now.hour() * 60 + now.minute();
-};
 
 const resolveTodayTiming = (schedule) => {
   const tz = schedule?.timezone || 'Asia/Kolkata';
@@ -70,22 +66,37 @@ const resolveTodayTiming = (schedule) => {
 const computeMarketState = (schedule) => {
   const { openTime, closeTime, todayDate, todayDay } = resolveTodayTiming(schedule);
   const tz = schedule?.timezone || 'Asia/Kolkata';
-
-  if (!schedule.isEnabled) {
-    return { isMarketOpen: false, reason: 'DISABLED', openTime, closeTime };
-  }
-
-  if (Array.isArray(schedule.holidays) && schedule.holidays.includes(todayDate)) {
-    return { isMarketOpen: false, reason: 'HOLIDAY', openTime, closeTime };
-  }
-
-  if (Array.isArray(schedule.weeklyOff) && schedule.weeklyOff.includes(todayDay)) {
-    return { isMarketOpen: false, reason: 'WEEKLY_OFF', openTime, closeTime };
-  }
+  const now = getNowInTimeZone(tz);
 
   const openMin = toMinutes(openTime);
   const closeMin = toMinutes(closeTime);
-  const nowMin = getNowMinutes(tz);
+  const nowMin = now.hour() * 60 + now.minute();
+
+  const sessionType =
+    openMin === closeMin ? 'OPEN_24H' : openMin < closeMin ? 'NORMAL' : 'OVERNIGHT';
+
+  const debug = {
+    todayDate,
+    todayDay,
+    timeZone: tz,
+    nowLocal: now.format('YYYY-MM-DD HH:mm:ss'),
+    nowMin,
+    openMin,
+    closeMin,
+    sessionType,
+  };
+
+  if (!schedule.isEnabled) {
+    return { isMarketOpen: false, reason: 'DISABLED', openTime, closeTime, debug };
+  }
+
+  if (Array.isArray(schedule.holidays) && schedule.holidays.includes(todayDate)) {
+    return { isMarketOpen: false, reason: 'HOLIDAY', openTime, closeTime, debug };
+  }
+
+  if (Array.isArray(schedule.weeklyOff) && schedule.weeklyOff.includes(todayDay)) {
+    return { isMarketOpen: false, reason: 'WEEKLY_OFF', openTime, closeTime, debug };
+  }
 
   // Support sessions that cross midnight.
   // Examples:
@@ -107,6 +118,7 @@ const computeMarketState = (schedule) => {
     reason: isOpen ? (openMin === closeMin ? 'OPEN_24H' : 'OPEN_TIME_WINDOW') : 'OUTSIDE_HOURS',
     openTime,
     closeTime,
+    debug,
   };
 };
 
@@ -268,7 +280,7 @@ export const marketService = {
   },
 
   // Force recompute status (ignores Redis status cache). Use for cron refresh.
-  async refreshMarketStatus(segment) {
+  async refreshMarketStatus(segment, { debug = false } = {}) {
     const seg = normalizeSegment(segment);
     if (!seg) return { error: { status: 400, message: 'segment is required' } };
 
@@ -288,9 +300,15 @@ export const marketService = {
       lastCheckedAt: new Date().toISOString(),
     };
 
+    const cacheStatus = { ...status };
+
+    if (debug) {
+      status.debug = computed.debug;
+    }
+
     await redisSetSafeWithTtl(
       REDIS_MARKET_STATUS_KEY(seg),
-      JSON.stringify(status),
+      JSON.stringify(cacheStatus),
       MARKET_STATUS_TTL_SECONDS
     );
 
