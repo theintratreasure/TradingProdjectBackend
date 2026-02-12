@@ -1,7 +1,12 @@
 import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc.js';
+import timezone from 'dayjs/plugin/timezone.js';
 import { MarketSchedule } from '../models/MarketSchedule.model.js';
 import redis, { isRedisReady } from '../config/redis.js';
 import { REDIS_MARKET_SCHEDULE_KEY, REDIS_MARKET_STATUS_KEY } from '../config/market.redis.js';
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
 
 const normalizeSegment = (segment) => String(segment || '').trim().toLowerCase();
 const normalizeDay = (dayName) => String(dayName || '').trim().toUpperCase();
@@ -20,13 +25,27 @@ const toMinutes = (hhmm) => {
   return h * 60 + m;
 };
 
-const getTodayYYYYMMDD = () => dayjs().format('YYYY-MM-DD');
-const getTodayDayName = () => dayjs().format('dddd').toUpperCase();
-const getNowMinutes = () => dayjs().hour() * 60 + dayjs().minute();
+const getNowInTimeZone = (timeZone) => {
+  if (!timeZone) return dayjs();
+  try {
+    return dayjs().tz(timeZone);
+  } catch {
+    // If an invalid IANA timezone string is provided, fallback to server time
+    return dayjs();
+  }
+};
+
+const getTodayYYYYMMDD = (timeZone) => getNowInTimeZone(timeZone).format('YYYY-MM-DD');
+const getTodayDayName = (timeZone) => getNowInTimeZone(timeZone).format('dddd').toUpperCase();
+const getNowMinutes = (timeZone) => {
+  const now = getNowInTimeZone(timeZone);
+  return now.hour() * 60 + now.minute();
+};
 
 const resolveTodayTiming = (schedule) => {
-  const todayDate = getTodayYYYYMMDD();
-  const todayDay = getTodayDayName();
+  const tz = schedule?.timezone || 'Asia/Kolkata';
+  const todayDate = getTodayYYYYMMDD(tz);
+  const todayDay = getTodayDayName(tz);
 
   let openTime = schedule.openTime;
   let closeTime = schedule.closeTime;
@@ -50,6 +69,7 @@ const resolveTodayTiming = (schedule) => {
 
 const computeMarketState = (schedule) => {
   const { openTime, closeTime, todayDate, todayDay } = resolveTodayTiming(schedule);
+  const tz = schedule?.timezone || 'Asia/Kolkata';
 
   if (!schedule.isEnabled) {
     return { isMarketOpen: false, reason: 'DISABLED', openTime, closeTime };
@@ -65,7 +85,7 @@ const computeMarketState = (schedule) => {
 
   const openMin = toMinutes(openTime);
   const closeMin = toMinutes(closeTime);
-  const nowMin = getNowMinutes();
+  const nowMin = getNowMinutes(tz);
 
   const isOpen = nowMin >= openMin && nowMin <= closeMin;
 
