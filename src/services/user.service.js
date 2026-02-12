@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import User from '../models/User.model.js';
 import UserProfile from '../models/UserProfile.model.js';
+import Kyc from '../models/Kyc.model.js';
 
 // search users by name or email
 export async function searchUsersService(query = {}) {
@@ -122,6 +123,7 @@ export async function adminUpdateUserService(userId, payload = {}) {
     userType,
     isMailVerified,
     kycStatus,
+    kycRejectionReason,
     date_of_birth,
     gender,
     address_line_1,
@@ -160,6 +162,27 @@ export async function adminUpdateUserService(userId, payload = {}) {
   try {
     let updatedUser = null;
     let updatedProfile = null;
+    let updatedKyc = null;
+
+    const normalizeKyc = (value) =>
+      String(value || '')
+        .trim()
+        .toUpperCase();
+
+    const ALLOWED_KYC = new Set([
+      'NOT_STARTED',
+      'PENDING',
+      'VERIFIED',
+      'REJECTED'
+    ]);
+
+    if (userUpdate.kycStatus !== undefined) {
+      const normalized = normalizeKyc(userUpdate.kycStatus);
+      if (!ALLOWED_KYC.has(normalized)) {
+        throw new Error('Invalid kycStatus');
+      }
+      userUpdate.kycStatus = normalized;
+    }
 
     await session.withTransaction(async () => {
       if (Object.keys(userUpdate).length > 0) {
@@ -176,6 +199,43 @@ export async function adminUpdateUserService(userId, payload = {}) {
         throw new Error('User not found');
       }
 
+      // Keep KYC model in sync when admin updates `user.kycStatus` via this endpoint.
+      // - NOT_STARTED => delete KYC doc (if exists)
+      // - PENDING/VERIFIED/REJECTED => update existing KYC doc status
+      if (kycStatus !== undefined) {
+        const next = normalizeKyc(kycStatus);
+
+        if (!ALLOWED_KYC.has(next)) {
+          throw new Error('Invalid kycStatus');
+        }
+
+        if (next === 'NOT_STARTED') {
+          await Kyc.deleteOne({ user: userId }, { session });
+          updatedKyc = null;
+        } else {
+          const kycDoc = await Kyc.findOne({ user: userId }).session(session);
+
+          if (!kycDoc) {
+            throw new Error(
+              'KYC record not found. User must submit KYC documents first.'
+            );
+          }
+
+          if (next === 'REJECTED') {
+            const reason = String(kycRejectionReason || '').trim();
+            if (!reason) {
+              throw new Error('KYC rejection reason is required');
+            }
+            kycDoc.rejectionReason = reason;
+          } else {
+            kycDoc.rejectionReason = '';
+          }
+
+          kycDoc.status = next;
+          updatedKyc = await kycDoc.save({ session });
+        }
+      }
+
       if (Object.keys(profileUpdate).length > 0) {
         updatedProfile = await UserProfile.findOneAndUpdate(
           { user_id: userId },
@@ -189,7 +249,8 @@ export async function adminUpdateUserService(userId, payload = {}) {
 
     return {
       user: updatedUser,
-      profile: updatedProfile
+      profile: updatedProfile,
+      kyc: updatedKyc ? updatedKyc.toObject?.() || updatedKyc : updatedKyc
     };
   } finally {
     session.endSession();
