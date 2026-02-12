@@ -556,6 +556,219 @@ export const listAdminWithdrawals = async ({ query }) => {
   };
 };
 
+/* -------------------- ADMIN: SEARCH WITHDRAWALS -------------------- */
+
+export const adminSearchWithdrawals = async ({ query }) => {
+  try {
+    const { page, limit, skip } = parsePagination(query);
+
+    const match = {};
+
+    const userIdRaw = String(query.userId ?? query.user ?? "").trim();
+    if (userIdRaw) {
+      if (!mongoose.isValidObjectId(userIdRaw)) {
+        return { ok: false, statusCode: 400, message: "Invalid userId" };
+      }
+      match.user = new mongoose.Types.ObjectId(userIdRaw);
+    }
+
+    const accountIdRaw = String(query.accountId ?? query.account ?? "").trim();
+    if (accountIdRaw) {
+      if (!mongoose.isValidObjectId(accountIdRaw)) {
+        return { ok: false, statusCode: 400, message: "Invalid accountId" };
+      }
+      match.account = new mongoose.Types.ObjectId(accountIdRaw);
+    }
+
+    const statusRaw =
+      typeof query.status === "string" ? query.status.trim().toUpperCase() : "";
+    if (statusRaw) {
+      const allowed = new Set([
+        "PENDING",
+        "APPROVED",
+        "REJECTED",
+        "PROCESSING",
+        "COMPLETED",
+        "FAILED",
+      ]);
+
+      if (!allowed.has(statusRaw)) {
+        return {
+          ok: false,
+          statusCode: 400,
+          message:
+            "Invalid status. Allowed: PENDING, APPROVED, REJECTED, PROCESSING, COMPLETED, FAILED",
+        };
+      }
+
+      match.status = statusRaw;
+    }
+
+    const methodRaw =
+      typeof query.method === "string" ? query.method.trim().toUpperCase() : "";
+    if (methodRaw) {
+      const allowed = new Set(["UPI", "BANK", "CRYPTO"]);
+
+      if (!allowed.has(methodRaw)) {
+        return {
+          ok: false,
+          statusCode: 400,
+          message: "Invalid method. Allowed: UPI, BANK, CRYPTO",
+        };
+      }
+
+      match.method = methodRaw;
+    }
+
+    const fromRaw = String(query.fromDate ?? query.startDate ?? query.from ?? "")
+      .trim();
+    const toRaw = String(query.toDate ?? query.endDate ?? query.to ?? "").trim();
+
+    const from = fromRaw ? new Date(fromRaw) : null;
+    const to = toRaw ? new Date(toRaw) : null;
+
+    const fromValid = from instanceof Date && !Number.isNaN(from.getTime());
+    const toValid = to instanceof Date && !Number.isNaN(to.getTime());
+
+    if (fromRaw && !fromValid) {
+      return { ok: false, statusCode: 400, message: "Invalid fromDate" };
+    }
+
+    if (toRaw && !toValid) {
+      return { ok: false, statusCode: 400, message: "Invalid toDate" };
+    }
+
+    if (fromValid || toValid) {
+      match.createdAt = {};
+      if (fromValid) match.createdAt.$gte = from;
+      if (toValid) match.createdAt.$lte = to;
+    }
+
+    const sortByRaw =
+      typeof query.sortBy === "string" ? query.sortBy.trim() : "";
+    const sortBy = ["createdAt", "updatedAt", "actionAt", "amount"].includes(
+      sortByRaw,
+    )
+      ? sortByRaw
+      : "createdAt";
+
+    const sortDirRaw =
+      typeof query.sortDir === "string" ? query.sortDir.trim().toLowerCase() : "";
+    const sortDir = sortDirRaw === "asc" ? 1 : -1;
+
+    const q = String(query.q || "").trim();
+    const escapeRegex = (s) =>
+      String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+    const qMatch = [];
+    if (q) {
+      const rx = new RegExp(escapeRegex(q), "i");
+
+      qMatch.push(
+        { "user.name": rx },
+        { "user.email": rx },
+        { "user.phone": rx },
+        { "account.account_number": rx },
+        { "account.plan_name": rx },
+      );
+
+      if (mongoose.isValidObjectId(q)) {
+        qMatch.push({ _id: new mongoose.Types.ObjectId(q) });
+      }
+    }
+
+    const pipeline = [
+      { $match: match },
+      {
+        $lookup: {
+          from: User.collection.name,
+          localField: "user",
+          foreignField: "_id",
+          as: "user",
+        },
+      },
+      { $unwind: { path: "$user", preserveNullAndEmptyArrays: true } },
+      {
+        $lookup: {
+          from: Account.collection.name,
+          localField: "account",
+          foreignField: "_id",
+          as: "account",
+        },
+      },
+      { $unwind: { path: "$account", preserveNullAndEmptyArrays: true } },
+      ...(qMatch.length > 0 ? [{ $match: { $or: qMatch } }] : []),
+      { $sort: { [sortBy]: sortDir, _id: sortDir } },
+      {
+        $facet: {
+          items: [
+            { $skip: skip },
+            { $limit: limit },
+            {
+              $project: {
+                _id: 1,
+                user: {
+                  _id: "$user._id",
+                  name: "$user.name",
+                  email: "$user.email",
+                  phone: "$user.phone",
+                  userType: "$user.userType",
+                  isMailVerified: "$user.isMailVerified",
+                  kycStatus: "$user.kycStatus",
+                },
+                account: {
+                  _id: "$account._id",
+                  account_number: "$account.account_number",
+                  account_type: "$account.account_type",
+                  plan_name: "$account.plan_name",
+                  balance: "$account.balance",
+                  hold_balance: "$account.hold_balance",
+                  status: "$account.status",
+                },
+                amount: 1,
+                method: 1,
+                payout: 1,
+                status: 1,
+                rejectionReason: 1,
+                actionBy: 1,
+                actionAt: 1,
+                ipAddress: 1,
+                createdAt: 1,
+                updatedAt: 1,
+              },
+            },
+          ],
+          total: [{ $count: "count" }],
+        },
+      },
+    ];
+
+    const result = await Withdrawal.aggregate(pipeline).allowDiskUse(true);
+    const items = result?.[0]?.items || [];
+    const total = result?.[0]?.total?.[0]?.count || 0;
+
+    return {
+      ok: true,
+      statusCode: 200,
+      data: {
+        items,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: total === 0 ? 0 : Math.ceil(total / limit),
+        },
+      },
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      statusCode: 400,
+      message: error instanceof Error ? error.message : "Something went wrong",
+    };
+  }
+};
+
 /* -------------------- ADMIN: APPROVE WITHDRAWAL -------------------- */
 /**
  * ADMIN: APPROVE WITHDRAWAL

@@ -467,6 +467,150 @@ export async function resendEmailVerificationService(email) {
   };
 }
 
+/* ================= ADMIN SIGNUP (BOOTSTRAP) ================= */
+export async function adminSignupService({
+  email,
+  phone,
+  name,
+  password,
+  confirmPassword,
+  signup_ip,
+  isMailVerified = true,
+  kycStatus,
+  profile = {}
+}) {
+  if (!email || typeof email !== 'string') {
+    throw new Error('Email is required');
+  }
+
+  if (!password || typeof password !== 'string') {
+    throw new Error('Password is required');
+  }
+
+  if (!confirmPassword || typeof confirmPassword !== 'string') {
+    throw new Error('Confirm password is required');
+  }
+
+  if (password !== confirmPassword) {
+    throw new Error('Password and confirm password do not match');
+  }
+
+  const emailNormalized = email.toLowerCase().trim();
+
+  const phoneNormalized =
+    typeof phone === 'string' ? phone.trim() : phone;
+
+  const safePhone =
+    typeof phoneNormalized === 'string' && phoneNormalized.length === 0
+      ? undefined
+      : phoneNormalized;
+
+  const safeName = typeof name === 'string' ? name.trim() : name;
+
+  const allowedKycStatus = new Set([
+    'NOT_STARTED',
+    'PENDING',
+    'VERIFIED',
+    'REJECTED'
+  ]);
+
+  const safeKycStatus =
+    typeof kycStatus === 'string'
+      ? kycStatus.trim().toUpperCase()
+      : undefined;
+
+  if (safeKycStatus && !allowedKycStatus.has(safeKycStatus)) {
+    throw new Error('Invalid kycStatus');
+  }
+
+  const mailVerified = Boolean(isMailVerified);
+
+  let user = null;
+  let verifyToken = null;
+
+  try {
+    user = await User.create({
+      email: emailNormalized,
+      phone: safePhone,
+      name: safeName,
+      signup_ip,
+      userType: 'ADMIN',
+      isMailVerified: mailVerified,
+      ...(safeKycStatus ? { kycStatus: safeKycStatus } : {})
+    });
+
+    const passwordHash = await hashPassword(password);
+
+    const authPayload = {
+      user_id: user._id,
+      password_hash: passwordHash
+    };
+
+    if (!mailVerified) {
+      verifyToken = randomToken();
+      authPayload.email_verify_token_hash = sha256(verifyToken);
+      authPayload.email_verify_token_expires_at = new Date(
+        Date.now() + 24 * 60 * 60 * 1000
+      );
+    }
+
+    await Auth.create(authPayload);
+
+    await Referral.create({
+      user_id: user._id,
+      referral_code: generateReferralCode(),
+      referred_by: null,
+      status: 'CONFIRMED'
+    });
+
+    const safeProfile =
+      profile && typeof profile === 'object' ? profile : {};
+
+    await UserProfile.create({
+      user_id: user._id,
+      date_of_birth: safeProfile.date_of_birth ?? null,
+      gender: safeProfile.gender ?? null,
+      address_line_1: safeProfile.address_line_1 ?? '',
+      address_line_2: safeProfile.address_line_2 ?? '',
+      city: safeProfile.city ?? '',
+      state: safeProfile.state ?? '',
+      country: safeProfile.country ?? '',
+      pincode: safeProfile.pincode ?? ''
+    });
+
+    if (!mailVerified && verifyToken) {
+      sendEmailVerificationMail(
+        user.email,
+        `${process.env.FRONTEND_URL}/verify-email?token=${verifyToken}`
+      ).catch(err => {
+        console.error('EMAIL SEND ERROR:', err);
+      });
+    }
+
+    return {
+      user_id: user._id,
+      message: mailVerified
+        ? 'Admin signup successful'
+        : 'Admin signup successful, confirmation email sent'
+    };
+  } catch (err) {
+    if (user?._id) {
+      await Promise.allSettled([
+        Auth.deleteOne({ user_id: user._id }),
+        Referral.deleteOne({ user_id: user._id }),
+        UserProfile.deleteOne({ user_id: user._id }),
+        User.deleteOne({ _id: user._id })
+      ]);
+    }
+
+    if (err && err.code === 11000) {
+      throw new Error('Email or phone already exists');
+    }
+
+    throw err;
+  }
+}
+
 /* ================= ADMIN CHANGE USER PASSWORD ================= */
 export async function adminChangeUserPasswordService(userId, newPassword) {
   if (!mongoose.isValidObjectId(userId)) {

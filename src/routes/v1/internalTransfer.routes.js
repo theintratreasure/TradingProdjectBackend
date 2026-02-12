@@ -1,9 +1,11 @@
 import express from 'express';
 import {
   createInternalTransferController,
+  adminCreateInternalTransferController,
   getUserInternalTransfersController
 } from '../../controllers/internalTransfer.controller.js';
 import { authMiddleware } from '../../middlewares/auth.middleware.js';
+import { adminAuth } from '../../middlewares/adminAuth.middleware.js';
 
 const router = express.Router();
 
@@ -12,6 +14,12 @@ const router = express.Router();
  * body: { fromAccount, toAccount, amount }
  */
 router.post('/', authMiddleware, createInternalTransferController);
+
+/**
+ * POST /api/v1/internal-transfer/admin/create
+ * body: { fromAccount, toAccount, amount }
+ */
+router.post('/admin/create', authMiddleware, adminAuth, adminCreateInternalTransferController);
 
 /**
  * GET /api/v1/internal-transfer?page=1&limit=10

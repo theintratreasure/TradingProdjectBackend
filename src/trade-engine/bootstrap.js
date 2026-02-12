@@ -35,6 +35,9 @@ export async function bootstrapEngine({ accounts, symbols }) {
 
   for (const sym of symbols) {
     tradeEngine.loadSymbol(sym.code, {
+      // Segment is used for market open/close checks (forex/crypto/metal etc).
+      // Normalize to lowercase to match MarketSchedule segment keys.
+      segment: sym.segment ? String(sym.segment).trim().toLowerCase() : undefined,
       contractSize: sym.contractSize,
       maxLeverage: sym.maxLeverage || 2000,
 

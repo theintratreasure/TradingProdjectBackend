@@ -209,6 +209,8 @@ class EngineSync {
     }
 
     tradeEngine.loadSymbol(code, {
+      // Segment is used for market schedule validation inside the engine.
+      segment: instrument.segment ? String(instrument.segment).trim().toLowerCase() : undefined,
       contractSize: Number(instrument.contractSize) || 1,
       maxLeverage: Number(instrument.maxLeverage) || 2000,
       spread: Number(instrument.spread) || 0,

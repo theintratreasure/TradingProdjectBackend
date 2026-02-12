@@ -7,6 +7,8 @@ import app from "./app.js";
 import { connectDB } from "./config/database.js";
 import { startMarketCron } from "./jobs/market.cron.js";
 import { attachMarketWS } from "./ws/market.js";
+import { MarketSchedule } from "./models/MarketSchedule.model.js";
+import { marketService } from "./services/market.service.js";
 
 // 🔥 TRADE ENGINE
 import { bootstrapEngine, tradeEngine } from "./trade-engine/bootstrap.js";
@@ -47,6 +49,7 @@ const symbols = await Instrument.find(
   { isTradeable: true },
   {
     code: 1,
+    segment: 1,
     contractSize: 1,
     maxLeverage: 1,
     spread: 1,
@@ -66,6 +69,31 @@ const symbols = await Instrument.find(
   });
 
   console.log("[TRADE ENGINE] RAM READY");
+
+  // Warm up market status in RAM so market-hours validation works immediately.
+  // (The cron will keep refreshing it every minute.)
+  try {
+    const schedules = await MarketSchedule.find({}).select("segment").lean();
+    const segmentSet = new Set();
+
+    for (const s of schedules) {
+      if (s?.segment) segmentSet.add(String(s.segment));
+    }
+    for (const sym of symbols) {
+      if (sym?.segment) segmentSet.add(String(sym.segment));
+    }
+
+    for (const seg of segmentSet) {
+      const res = await marketService.refreshMarketStatus(seg);
+      if (res?.data) {
+        tradeEngine.setMarketStatus(res.data.segment, res.data);
+      }
+    }
+
+    console.log("[MARKET] status warmed:", Array.from(segmentSet));
+  } catch (err) {
+    console.error("[MARKET] status warmup failed:", err?.message || err);
+  }
 
   // =========================
   // 4️⃣ CREATE SERVER

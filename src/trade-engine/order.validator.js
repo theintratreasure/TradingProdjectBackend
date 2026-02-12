@@ -1,3 +1,7 @@
+// NOTE:
+// - Market open/close checks are enforced inside the trade-engine (Engine) using an in-memory
+//   market status cache populated by the market cron (no Redis/DB calls on the order path).
+// - This validator stays pure and only validates order price rules (SL/TP vs bid/ask).
 export function validateOrder({
   side,
   orderType,

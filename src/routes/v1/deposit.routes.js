@@ -4,6 +4,7 @@ import {
   getMyDeposits,
   getDepositStatus,
   adminGetAllDeposits,
+  adminSearchDeposits,
   adminApproveDeposit,
   adminRejectDeposit,
   adminEditDepositAmount,
@@ -22,6 +23,7 @@ router.get('/:id/status', authMiddleware, getDepositStatus);
 /* ADMIN */
 router.post('/admin-deposit', authMiddleware, adminAuth, adminCreateDeposit);
 router.get('/all', authMiddleware,adminAuth, adminGetAllDeposits);
+router.get('/admin/search', authMiddleware, adminAuth, adminSearchDeposits);
 router.patch('/:id/approve', authMiddleware,adminAuth, adminApproveDeposit);
 router.patch('/:id/reject', authMiddleware,adminAuth, adminRejectDeposit);
 router.patch('/:id/edit-amount',authMiddleware,adminAuth,adminEditDepositAmount);

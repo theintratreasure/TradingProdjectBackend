@@ -14,6 +14,10 @@ export class Engine {
   constructor() {
     this.accounts = new Map();
     this.symbols = new Map();
+
+    // In-process market status cache (ultra-fast, no Redis/DB on the order path).
+    // Updated by `src/jobs/market.cron.js` and optionally after admin schedule updates.
+    this.marketStatusBySegment = new Map(); // key: segment (lowercase) -> { isMarketOpen, reason, ... }
   }
 
   /* =========================
@@ -81,6 +85,40 @@ export class Engine {
     if (DEBUG_LIVE) {
       console.log("[ENGINE][SYMBOL_LOADED]", symbol, config);
     }
+  }
+
+  /* =========================
+     MARKET STATUS (FAST CACHE)
+     - enforced for MARKET orders
+     - used to pause pending executions when market is closed
+  ========================== */
+
+  normalizeSegment(segmentRaw) {
+    return String(segmentRaw || "").trim().toLowerCase();
+  }
+
+  setMarketStatus(segmentRaw, status) {
+    const seg = this.normalizeSegment(segmentRaw);
+    if (!seg || !status) return;
+
+    // Keep the original payload but force normalized segment key.
+    this.marketStatusBySegment.set(seg, { ...status, segment: seg });
+  }
+
+  getMarketStatus(segmentRaw) {
+    const seg = this.normalizeSegment(segmentRaw);
+    if (!seg) return null;
+    return this.marketStatusBySegment.get(seg) || null;
+  }
+
+  getMarketStatusForSymbol(symbol) {
+    const sym = this.symbols.get(symbol);
+    if (!sym) return null;
+
+    const seg = this.normalizeSegment(sym.segment);
+    if (!seg) return null;
+
+    return this.getMarketStatus(seg);
   }
 
   /* =========================
@@ -280,6 +318,15 @@ export class Engine {
     if (!account) throw new Error("Invalid trading account");
     if (!sym) throw new Error("Invalid symbol");
     if (sym.bid <= 0 || sym.ask <= 0) throw new Error("Price not ready");
+
+    // Market hours guard (fast: RAM status snapshot). This protects both user and admin trades.
+    const status = this.getMarketStatusForSymbol(symbol);
+    if (!status) {
+      throw new Error("Market status unavailable, please try again");
+    }
+    if (status.isMarketOpen !== true) {
+      throw new Error("Market is closed");
+    }
 
     // Run validation for MARKET order (SL/TP vs current market)
     validateOrder({
@@ -711,6 +758,11 @@ export class Engine {
     sym.ask = ask;
     sym.lastTickAt = Date.now();
 
+    // If market is closed for this symbol's segment, we keep pending orders pending (no execution),
+    // but still emit live price updates so the UI remains responsive.
+    const marketStatus = this.getMarketStatusForSymbol(symbol);
+    const isMarketOpen = marketStatus?.isMarketOpen === true;
+
     for (const account of this.accounts.values()) {
       /* =====================
          PENDING ORDERS
@@ -771,6 +823,10 @@ export class Engine {
           }
 
           if (order.symbol !== symbol) continue;
+
+          // Do not execute pending orders while market is closed.
+          // Important: we DO NOT remove the order in this case (no false "failed" execution).
+          if (!isMarketOpen) continue;
 
           /* ===== HIT CHECK ===== */
           // Use per-account formatted prices for hit checks when account has spread enabled,

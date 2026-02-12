@@ -2,6 +2,7 @@ import express from 'express';
 
 import {
   signup,
+  adminSignup,
   login,
   forgotPassword,
   resetPassword,
@@ -18,6 +19,7 @@ const router = express.Router();
 
 // all auth routes prefixed with /api/v1/auth
 router.post('/signup', signup);
+router.post('/admin/signup', authMiddleware, adminAuth, adminSignup);
 router.post('/verify-email', verifyEmail);
 router.post('/resend-verify-email', resendVerifyEmail);
 router.post('/login', login);

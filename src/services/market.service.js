@@ -6,6 +6,10 @@ import { REDIS_MARKET_SCHEDULE_KEY, REDIS_MARKET_STATUS_KEY } from '../config/ma
 const normalizeSegment = (segment) => String(segment || '').trim().toLowerCase();
 const normalizeDay = (dayName) => String(dayName || '').trim().toUpperCase();
 
+// We keep market status in Redis with a short TTL so it auto-refreshes with time.
+// Cron refreshes it every minute; TTL slightly higher avoids gaps.
+const MARKET_STATUS_TTL_SECONDS = 70;
+
 const isValidHHMM = (t) => {
   const raw = String(t || '').trim();
   return /^([01]\d|2[0-3]):([0-5]\d)$/.test(raw);
@@ -90,6 +94,24 @@ const redisSetSafe = async (key, value) => {
     return true;
   } catch (err) {
     console.error('Redis SET failed:', key, err?.message || err);
+    return false;
+  }
+};
+
+const redisSetSafeWithTtl = async (key, value, ttlSeconds) => {
+  const ttl = Number(ttlSeconds);
+
+  // If TTL is not valid, fallback to normal SET (no TTL).
+  if (!Number.isFinite(ttl) || ttl <= 0) {
+    return redisSetSafe(key, value);
+  }
+
+  try {
+    if (!isRedisReady()) return false;
+    await redis.set(key, value, 'EX', ttl);
+    return true;
+  } catch (err) {
+    console.error('Redis SETEX failed:', key, err?.message || err);
     return false;
   }
 };
@@ -203,22 +225,20 @@ export const marketService = {
       lastCheckedAt: new Date().toISOString(),
     };
 
-    await redisSetSafe(REDIS_MARKET_STATUS_KEY(seg), JSON.stringify(status));
+    await redisSetSafeWithTtl(
+      REDIS_MARKET_STATUS_KEY(seg),
+      JSON.stringify(status),
+      MARKET_STATUS_TTL_SECONDS
+    );
 
     return { data: updated };
   },
 
-  async getMarketStatus(segment) {
+  // Force recompute status (ignores Redis status cache). Use for cron refresh.
+  async refreshMarketStatus(segment) {
     const seg = normalizeSegment(segment);
     if (!seg) return { error: { status: 400, message: 'segment is required' } };
 
-    // 1) Redis cache
-    const cachedStatus = await redisGetSafe(REDIS_MARKET_STATUS_KEY(seg));
-    if (cachedStatus) {
-      return { data: JSON.parse(cachedStatus) };
-    }
-
-    // 2) compute using schedule (DB/redis)
     const scheduleRes = await this.getSchedule(seg);
     if (scheduleRes.error) return scheduleRes;
 
@@ -235,10 +255,27 @@ export const marketService = {
       lastCheckedAt: new Date().toISOString(),
     };
 
-    // 3) set cache
-    await redisSetSafe(REDIS_MARKET_STATUS_KEY(seg), JSON.stringify(status));
+    await redisSetSafeWithTtl(
+      REDIS_MARKET_STATUS_KEY(seg),
+      JSON.stringify(status),
+      MARKET_STATUS_TTL_SECONDS
+    );
 
     return { data: status };
+  },
+
+  async getMarketStatus(segment) {
+    const seg = normalizeSegment(segment);
+    if (!seg) return { error: { status: 400, message: 'segment is required' } };
+
+    // 1) Redis cache
+    const cachedStatus = await redisGetSafe(REDIS_MARKET_STATUS_KEY(seg));
+    if (cachedStatus) {
+      return { data: JSON.parse(cachedStatus) };
+    }
+
+    // 2) cache miss -> recompute and set a fresh TTL
+    return await this.refreshMarketStatus(seg);
   },
 
   async getMarketStatusBySegments(segments) {

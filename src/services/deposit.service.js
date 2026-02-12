@@ -4,6 +4,7 @@ import Deposit from "../models/Deposit.model.js";
 import Account from "../models/Account.model.js";
 import AccountPlan from "../models/AccountPlan.model.js";
 import DepositModel from "../models/Deposit.model.js";
+import User from "../models/User.model.js";
 import Transaction from "../models/Transaction.model.js";
 import redis from "../config/redis.js";
 import EngineSync from "../trade-engine/EngineSync.js";
@@ -227,6 +228,189 @@ export async function adminGetAllDepositsService({ page, limit, filters }) {
   await redis.setex(cacheKey, 60, JSON.stringify(result));
 
   return result;
+}
+
+/**
+ * ADMIN SEARCH DEPOSITS (PAGINATED + FILTERS + USER SEARCH)
+ * Supports:
+ * - q: user name/email/phone, account_number, plan_name, depositId
+ * - status, method, userId, accountId
+ * - fromDate/toDate (createdAt)
+ */
+export async function adminSearchDepositsService(query = {}) {
+  const pageRaw = Number(query.page);
+  const limitRaw = Number(query.limit);
+
+  const page = Number.isFinite(pageRaw) && pageRaw > 0 ? pageRaw : 1;
+  const limit =
+    Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 100) : 20;
+  const skip = (page - 1) * limit;
+
+  const match = {};
+
+  const statusRaw =
+    typeof query.status === "string" ? query.status.trim().toUpperCase() : "";
+  if (statusRaw) {
+    if (!["PENDING", "APPROVED", "REJECTED"].includes(statusRaw)) {
+      throw new Error("Invalid status. Allowed: PENDING, APPROVED, REJECTED");
+    }
+    match.status = statusRaw;
+  }
+
+  const methodRaw =
+    typeof query.method === "string" ? query.method.trim().toUpperCase() : "";
+  if (methodRaw) {
+    if (!["UPI", "BANK", "CRYPTO", "MANUAL"].includes(methodRaw)) {
+      throw new Error("Invalid method. Allowed: UPI, BANK, CRYPTO, MANUAL");
+    }
+    match.method = methodRaw;
+  }
+
+  const userIdRaw = String(query.userId ?? query.user ?? "").trim();
+  if (userIdRaw) {
+    if (!mongoose.isValidObjectId(userIdRaw)) {
+      throw new Error("Invalid userId");
+    }
+    match.user = new mongoose.Types.ObjectId(userIdRaw);
+  }
+
+  const accountIdRaw = String(query.accountId ?? query.account ?? "").trim();
+  if (accountIdRaw) {
+    if (!mongoose.isValidObjectId(accountIdRaw)) {
+      throw new Error("Invalid accountId");
+    }
+    match.account = new mongoose.Types.ObjectId(accountIdRaw);
+  }
+
+  const fromRaw = String(
+    query.fromDate ?? query.startDate ?? query.from ?? "",
+  ).trim();
+  const toRaw = String(query.toDate ?? query.endDate ?? query.to ?? "").trim();
+
+  const from = fromRaw ? new Date(fromRaw) : null;
+  const to = toRaw ? new Date(toRaw) : null;
+
+  const fromValid = from instanceof Date && !Number.isNaN(from.getTime());
+  const toValid = to instanceof Date && !Number.isNaN(to.getTime());
+
+  if (fromRaw && !fromValid) throw new Error("Invalid fromDate");
+  if (toRaw && !toValid) throw new Error("Invalid toDate");
+
+  if (fromValid || toValid) {
+    match.createdAt = {};
+    if (fromValid) match.createdAt.$gte = from;
+    if (toValid) match.createdAt.$lte = to;
+  }
+
+  const sortDirRaw =
+    typeof query.sortDir === "string" ? query.sortDir.trim().toLowerCase() : "";
+  const sortDir = sortDirRaw === "asc" ? 1 : -1;
+
+  const sortByRaw =
+    typeof query.sortBy === "string" ? query.sortBy.trim() : "";
+  const sortBy = ["createdAt", "updatedAt", "actionAt", "amount"].includes(
+    sortByRaw,
+  )
+    ? sortByRaw
+    : "createdAt";
+
+  const q = String(query.q || "").trim();
+  const escapeRegex = (s) =>
+    String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  const qMatch = [];
+  if (q) {
+    const rx = new RegExp(escapeRegex(q), "i");
+
+    qMatch.push(
+      { "user.email": rx },
+      { "user.name": rx },
+      { "user.phone": rx },
+      { "account.account_number": rx },
+      { "account.plan_name": rx },
+    );
+
+    if (mongoose.isValidObjectId(q)) {
+      qMatch.push({ _id: new mongoose.Types.ObjectId(q) });
+    }
+  }
+
+  const pipeline = [
+    { $match: match },
+    {
+      $lookup: {
+        from: User.collection.name,
+        localField: "user",
+        foreignField: "_id",
+        as: "user",
+      },
+    },
+    { $unwind: { path: "$user", preserveNullAndEmptyArrays: true } },
+    {
+      $lookup: {
+        from: Account.collection.name,
+        localField: "account",
+        foreignField: "_id",
+        as: "account",
+      },
+    },
+    { $unwind: { path: "$account", preserveNullAndEmptyArrays: true } },
+    ...(qMatch.length > 0 ? [{ $match: { $or: qMatch } }] : []),
+    { $sort: { [sortBy]: sortDir, _id: sortDir } },
+    {
+      $facet: {
+        items: [
+          { $skip: skip },
+          { $limit: limit },
+          {
+            $project: {
+              _id: 1,
+              user: {
+                _id: "$user._id",
+                name: "$user.name",
+                email: "$user.email",
+                phone: "$user.phone",
+                userType: "$user.userType",
+                isMailVerified: "$user.isMailVerified",
+                kycStatus: "$user.kycStatus",
+              },
+              account: {
+                _id: "$account._id",
+                account_number: "$account.account_number",
+                account_type: "$account.account_type",
+                plan_name: "$account.plan_name",
+              },
+              amount: 1,
+              method: 1,
+              status: 1,
+              rejectionReason: 1,
+              proof: 1,
+              actionBy: 1,
+              actionAt: 1,
+              ipAddress: 1,
+              createdAt: 1,
+              updatedAt: 1,
+            },
+          },
+        ],
+        total: [{ $count: "count" }],
+      },
+    },
+  ];
+
+  const result = await Deposit.aggregate(pipeline).allowDiskUse(true);
+  const items = result?.[0]?.items || [];
+  const total = result?.[0]?.total?.[0]?.count || 0;
+
+  return {
+    items,
+    pagination: {
+      page,
+      limit,
+      total,
+      totalPages: total === 0 ? 0 : Math.ceil(total / limit),
+    },
+  };
 }
 
 /* =========================

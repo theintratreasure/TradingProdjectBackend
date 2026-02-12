@@ -1,5 +1,6 @@
 import {
   signupService,
+  adminSignupService,
   loginService,
   forgotPasswordService,
   resetPasswordService,
@@ -30,6 +31,31 @@ export async function signup(req, res) {
     });
   } catch (e) {
     res.status(400).json({
+      success: false,
+      message: e.message
+    });
+  }
+}
+
+/* ================= ADMIN SIGNUP (ADMIN ONLY) ================= */
+export async function adminSignup(req, res) {
+  try {
+    const ip =
+      req.headers['x-forwarded-for']?.split(',')[0] ||
+      req.socket?.remoteAddress ||
+      null;
+
+    const data = await adminSignupService({
+      ...req.body,
+      signup_ip: ip
+    });
+
+    return res.status(201).json({
+      success: true,
+      data
+    });
+  } catch (e) {
+    return res.status(400).json({
       success: false,
       message: e.message
     });

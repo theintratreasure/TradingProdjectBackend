@@ -1,7 +1,29 @@
 import {
   createInternalTransferService,
+  adminCreateInternalTransferService,
   getUserInternalTransfersService
 } from '../services/internalTransfer.service.js';
+
+function getSafeError(err, fallbackMessage) {
+  if (err && typeof err === 'object' && err.isPublic) {
+    const statusCode =
+      Number.isFinite(Number(err.statusCode)) && Number(err.statusCode) >= 400
+        ? Number(err.statusCode)
+        : 400;
+
+    return {
+      statusCode,
+      message: err.message || fallbackMessage
+    };
+  }
+
+  console.error('[INTERNAL_TRANSFER] error:', err);
+
+  return {
+    statusCode: 500,
+    message: fallbackMessage
+  };
+}
 
 export async function createInternalTransferController(req, res) {
   try {
@@ -23,9 +45,38 @@ export async function createInternalTransferController(req, res) {
       data: result
     });
   } catch (err) {
-    return res.status(400).json({
+    const safe = getSafeError(err, 'Internal transfer failed');
+    return res.status(safe.statusCode).json({
       success: false,
-      message: err.message || 'Internal transfer failed'
+      message: safe.message
+    });
+  }
+}
+
+export async function adminCreateInternalTransferController(req, res) {
+  try {
+    const adminId = req.user._id;
+
+    const { fromAccount, toAccount, amount } = req.body;
+
+    const result = await adminCreateInternalTransferService({
+      adminId,
+      fromAccount,
+      toAccount,
+      amount: Number(amount),
+      ipAddress: req.ip
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: 'Admin internal transfer completed successfully',
+      data: result
+    });
+  } catch (err) {
+    const safe = getSafeError(err, 'Admin internal transfer failed');
+    return res.status(safe.statusCode).json({
+      success: false,
+      message: safe.message
     });
   }
 }
@@ -49,9 +100,10 @@ export async function getUserInternalTransfersController(req, res) {
       pagination: result.pagination
     });
   } catch (err) {
-    return res.status(400).json({
+    const safe = getSafeError(err, 'Failed to fetch internal transfer history');
+    return res.status(safe.statusCode).json({
       success: false,
-      message: err.message || 'Failed to fetch internal transfer history'
+      message: safe.message
     });
   }
 }

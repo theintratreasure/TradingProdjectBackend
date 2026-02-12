@@ -33,6 +33,13 @@ function getEndOfDay(date) {
   return d;
 }
 
+function publicError(message, statusCode = 400) {
+  const err = new Error(message);
+  err.statusCode = statusCode;
+  err.isPublic = true;
+  return err;
+}
+
 /* =====================================================
    RATE LIMIT HELPERS
 ===================================================== */
@@ -57,7 +64,9 @@ async function enforceCooldown({ userId, session, cooldownSeconds }) {
   );
 
   if (diff < cooldownSeconds) {
-    throw new Error(`Please wait ${cooldownSeconds - diff}s before next transfer`);
+    throw publicError(
+      `Please wait ${cooldownSeconds - diff}s before next transfer`,
+    );
   }
 }
 
@@ -80,7 +89,7 @@ async function enforceDailyLimits({
   }).session(session);
 
   if (count >= maxTransfersPerDay) {
-    throw new Error(`Daily transfer limit reached (${maxTransfersPerDay})`);
+    throw publicError(`Daily transfer limit reached (${maxTransfersPerDay})`);
   }
 
   const agg = await Transaction.aggregate([
@@ -101,7 +110,7 @@ async function enforceDailyLimits({
   const today = agg.length ? agg[0].total : 0;
 
   if (today + amount > maxDailyAmount) {
-    throw new Error(`Daily amount limit exceeded ($${maxDailyAmount})`);
+    throw publicError(`Daily amount limit exceeded ($${maxDailyAmount})`);
   }
 }
 
@@ -118,31 +127,38 @@ export async function createInternalTransferService({
 }) {
   /* ================= BASIC VALIDATION ================= */
 
-  if (!fromAccount || !toAccount || !amount) {
-    throw new Error("All fields are required");
+  if (!fromAccount || !toAccount || amount === undefined || amount === null) {
+    throw publicError("All fields are required");
+  }
+
+  if (
+    !mongoose.isValidObjectId(fromAccount) ||
+    !mongoose.isValidObjectId(toAccount)
+  ) {
+    throw publicError("Invalid account id");
   }
 
   if (String(fromAccount) === String(toAccount)) {
-    throw new Error("From and To accounts must be different");
+    throw publicError("From and To accounts must be different");
   }
 
   if (!isValidAmount(amount)) {
-    throw new Error("Invalid transfer amount");
+    throw publicError("Invalid transfer amount");
   }
 
   if (amount <= 0) {
-    throw new Error("Amount must be greater than 0");
+    throw publicError("Amount must be greater than 0");
   }
 
   if (!hasMaxTwoDecimals(amount)) {
-    throw new Error("Max 2 decimal places allowed");
+    throw publicError("Max 2 decimal places allowed");
   }
 
   const MIN = 10;
   const MAX = 50000;
 
-  if (amount < MIN) throw new Error(`Minimum $${MIN}`);
-  if (amount > MAX) throw new Error(`Maximum $${MAX}`);
+  if (amount < MIN) throw publicError(`Minimum $${MIN}`);
+  if (amount > MAX) throw publicError(`Maximum $${MAX}`);
 
   /* ================= TRANSACTION ================= */
 
@@ -168,31 +184,29 @@ export async function createInternalTransferService({
 
     /* ================= ACCOUNT VALIDATION ================= */
 
-    const [fromAcc, toAcc] = await Promise.all([
-      Account.findOne({
-        _id: fromAccount,
-        user_id: userId,
-        status: "active",
-      }).session(session),
+    const fromAcc = await Account.findOne({
+      _id: fromAccount,
+      user_id: userId,
+      status: "active",
+    }).session(session);
 
-      Account.findOne({
-        _id: toAccount,
-        user_id: userId,
-        status: "active",
-      }).session(session),
-    ]);
+    const toAcc = await Account.findOne({
+      _id: toAccount,
+      user_id: userId,
+      status: "active",
+    }).session(session);
 
-    if (!fromAcc) throw new Error("From account invalid");
-    if (!toAcc) throw new Error("To account invalid");
+    if (!fromAcc) throw publicError("From account invalid");
+    if (!toAcc) throw publicError("To account invalid");
 
     /* ================= LIVE → LIVE ================= */
 
     if (fromAcc.account_type !== "live") {
-      throw new Error("Only LIVE accounts allowed");
+      throw publicError("Only LIVE accounts allowed");
     }
 
     if (toAcc.account_type !== "live") {
-      throw new Error("Only LIVE accounts allowed");
+      throw publicError("Only LIVE accounts allowed");
     }
 
     /* ================= OPEN TRADE BLOCK ================= */
@@ -203,9 +217,7 @@ export async function createInternalTransferService({
     }).session(session);
 
     if (openTrades > 0) {
-      throw new Error(
-        "Transfer blocked: Close all open trades first"
-      );
+      throw publicError("Transfer blocked: Close all open trades first");
     }
 
     /* ================= FIRST DEPOSIT ================= */
@@ -215,15 +227,13 @@ export async function createInternalTransferService({
         .session(session)
         .lean();
 
-      throw new Error(
-        `Complete first deposit of $${plan?.minDeposit || 0}`
-      );
+      throw publicError(`Complete first deposit of $${plan?.minDeposit || 0}`);
     }
 
     /* ================= BALANCE CHECK ================= */
 
     if (fromAcc.balance < amount) {
-      throw new Error("Insufficient balance");
+      throw publicError("Insufficient balance");
     }
 
     /* ================= UPDATE BALANCES ================= */
@@ -231,19 +241,19 @@ export async function createInternalTransferService({
     const fromNew = fromAcc.balance - amount;
     const toNew = toAcc.balance + amount;
 
-    await Promise.all([
-      Account.updateOne(
-        { _id: fromAcc._id },
-        { $set: { balance: fromNew } },
-        { session }
-      ),
+    await Account.updateOne(
+      { _id: fromAcc._id },
+      // Keep DB equity in sync with balance for non-trade operations.
+      // (Floating PnL is tracked in the trade-engine RAM, not persisted here.)
+      { $set: { balance: fromNew, equity: fromNew } },
+      { session }
+    );
 
-      Account.updateOne(
-        { _id: toAcc._id },
-        { $set: { balance: toNew } },
-        { session }
-      ),
-    ]);
+    await Account.updateOne(
+      { _id: toAcc._id },
+      { $set: { balance: toNew, equity: toNew } },
+      { session }
+    );
 
     /* ================= TRANSACTION HISTORY ================= */
 
@@ -289,11 +299,18 @@ export async function createInternalTransferService({
 
     /* ================= ENGINE SYNC ================= */
 
-    await EngineSync.onInternalTransfer(
-      String(fromAcc._id),
-      String(toAcc._id),
-      amount
-    );
+    try {
+      await EngineSync.onInternalTransfer(
+        String(fromAcc._id),
+        String(toAcc._id),
+        amount
+      );
+    } catch (error) {
+      console.error(
+        "[ENGINE_SYNC] onInternalTransfer failed (createInternalTransferService)",
+        error && error.message ? error.message : error
+      );
+    }
 
     return {
       success: true,
@@ -305,7 +322,219 @@ export async function createInternalTransferService({
       toBalance: toNew,
     };
   } catch (err) {
-    await session.abortTransaction();
+    try {
+      await session.abortTransaction();
+    } catch (abortErr) {
+      console.error(
+        "[MONGO] abortTransaction failed (createInternalTransferService)",
+        abortErr && abortErr.message ? abortErr.message : abortErr
+      );
+    }
+    session.endSession();
+    throw err;
+  }
+}
+
+/* =====================================================
+   ADMIN: TRANSFER ON BEHALF (SAME USER)
+===================================================== */
+
+export async function adminCreateInternalTransferService({
+  adminId,
+  fromAccount,
+  toAccount,
+  amount,
+  ipAddress,
+}) {
+  if (!adminId || !mongoose.isValidObjectId(adminId)) {
+    throw publicError("Invalid adminId");
+  }
+
+  if (!fromAccount || !toAccount || amount === undefined || amount === null) {
+    throw publicError("All fields are required");
+  }
+
+  if (
+    !mongoose.isValidObjectId(fromAccount) ||
+    !mongoose.isValidObjectId(toAccount)
+  ) {
+    throw publicError("Invalid account id");
+  }
+
+  if (String(fromAccount) === String(toAccount)) {
+    throw publicError("From and To accounts must be different");
+  }
+
+  if (!isValidAmount(amount)) {
+    throw publicError("Invalid transfer amount");
+  }
+
+  if (amount <= 0) {
+    throw publicError("Amount must be greater than 0");
+  }
+
+  if (!hasMaxTwoDecimals(amount)) {
+    throw publicError("Max 2 decimal places allowed");
+  }
+
+  const MIN = 10;
+  const MAX = 50000;
+
+  if (amount < MIN) throw publicError(`Minimum $${MIN}`);
+  if (amount > MAX) throw publicError(`Maximum $${MAX}`);
+
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const fromAcc = await Account.findOne({
+      _id: fromAccount,
+      status: "active",
+    }).session(session);
+
+    const toAcc = await Account.findOne({
+      _id: toAccount,
+      status: "active",
+    }).session(session);
+
+    if (!fromAcc) throw publicError("From account invalid");
+    if (!toAcc) throw publicError("To account invalid");
+
+    const userId = String(fromAcc.user_id);
+
+    if (String(toAcc.user_id) !== userId) {
+      throw publicError("Transfer allowed only within same user accounts");
+    }
+
+    await enforceCooldown({
+      userId,
+      session,
+      cooldownSeconds: 10,
+    });
+
+    await enforceDailyLimits({
+      userId,
+      amount,
+      session,
+      maxTransfersPerDay: 10,
+      maxDailyAmount: 100000,
+    });
+
+    if (fromAcc.account_type !== "live") {
+      throw publicError("Only LIVE accounts allowed");
+    }
+
+    if (toAcc.account_type !== "live") {
+      throw publicError("Only LIVE accounts allowed");
+    }
+
+    const openTrades = await Trade.countDocuments({
+      accountId: fromAcc._id,
+      status: "OPEN",
+    }).session(session);
+
+    if (openTrades > 0) {
+      throw publicError("Transfer blocked: Close all open trades first");
+    }
+
+    if (toAcc.first_deposit === false) {
+      const plan = await AccountPlan.findById(toAcc.account_plan_id)
+        .session(session)
+        .lean();
+
+      throw publicError(`Complete first deposit of $${plan?.minDeposit || 0}`);
+    }
+
+    if (fromAcc.balance < amount) {
+      throw publicError("Insufficient balance");
+    }
+
+    const fromNew = fromAcc.balance - amount;
+    const toNew = toAcc.balance + amount;
+
+    await Account.updateOne(
+      { _id: fromAcc._id },
+      // Keep DB equity in sync with balance for non-trade operations.
+      // (Floating PnL is tracked in the trade-engine RAM, not persisted here.)
+      { $set: { balance: fromNew, equity: fromNew } },
+      { session },
+    );
+
+    await Account.updateOne(
+      { _id: toAcc._id },
+      { $set: { balance: toNew, equity: toNew } },
+      { session },
+    );
+
+    const refId = new mongoose.Types.ObjectId();
+
+    await Transaction.create(
+      [
+        {
+          user: userId,
+          account: fromAcc._id,
+          type: "INTERNAL_TRANSFER_OUT",
+          amount,
+          balanceAfter: fromNew,
+          status: "SUCCESS",
+          referenceType: "INTERNAL_TRANSFER",
+          referenceId: refId,
+          createdBy: adminId,
+          ipAddress,
+          remark: "Admin internal transfer debit",
+        },
+        {
+          user: userId,
+          account: toAcc._id,
+          type: "INTERNAL_TRANSFER_IN",
+          amount,
+          balanceAfter: toNew,
+          status: "SUCCESS",
+          referenceType: "INTERNAL_TRANSFER",
+          referenceId: refId,
+          createdBy: adminId,
+          ipAddress,
+          remark: "Admin internal transfer credit",
+        },
+      ],
+      { session, ordered: true },
+    );
+
+    await session.commitTransaction();
+    session.endSession();
+
+    try {
+      await EngineSync.onInternalTransfer(
+        String(fromAcc._id),
+        String(toAcc._id),
+        amount,
+      );
+    } catch (error) {
+      console.error(
+        "[ENGINE_SYNC] onInternalTransfer failed (adminCreateInternalTransferService)",
+        error && error.message ? error.message : error
+      );
+    }
+
+    return {
+      success: true,
+      referenceId: refId,
+      userId,
+      fromAccount: fromAcc._id,
+      toAccount: toAcc._id,
+      amount,
+      fromBalance: fromNew,
+      toBalance: toNew,
+    };
+  } catch (err) {
+    try {
+      await session.abortTransaction();
+    } catch (abortErr) {
+      console.error(
+        "[MONGO] abortTransaction failed (adminCreateInternalTransferService)",
+        abortErr && abortErr.message ? abortErr.message : abortErr
+      );
+    }
     session.endSession();
     throw err;
   }

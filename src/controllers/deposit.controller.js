@@ -3,6 +3,7 @@ import {
   getUserDepositsService,
   getDepositStatusService,
   adminGetAllDepositsService,
+  adminSearchDepositsService,
   approveDepositService,
   rejectDepositService,
   editDepositAmountService,
@@ -101,6 +102,24 @@ export async function adminGetAllDeposits(req, res) {
     });
   } catch (err) {
     return res.status(500).json({
+      success: false,
+      message: err.message
+    });
+  }
+}
+
+/* ADMIN: SEARCH */
+export async function adminSearchDeposits(req, res) {
+  try {
+    const result = await adminSearchDepositsService(req.query);
+
+    return res.json({
+      success: true,
+      data: result.items,
+      pagination: result.pagination
+    });
+  } catch (err) {
+    return res.status(400).json({
       success: false,
       message: err.message
     });

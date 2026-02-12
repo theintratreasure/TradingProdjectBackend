@@ -2,6 +2,7 @@ import {
   createWithdrawal,
   listUserWithdrawals,
   listAdminWithdrawals,
+  adminSearchWithdrawals,
   adminApproveWithdrawal,
   adminRejectWithdrawal,
   adminCreateWithdrawal,
@@ -41,6 +42,18 @@ export const listAdminWithdrawalsController = async (req, res) => {
   return res.status(result.statusCode).json({
     success: result.ok,
     data: result.data,
+  });
+};
+
+export const adminSearchWithdrawalsController = async (req, res) => {
+  const result = await adminSearchWithdrawals({
+    query: req.query
+  });
+
+  return res.status(result.statusCode).json({
+    success: result.ok,
+    message: result.message || undefined,
+    data: result.data || null
   });
 };
 
