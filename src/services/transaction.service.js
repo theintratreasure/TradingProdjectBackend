@@ -41,7 +41,7 @@ export async function getUserTransactionHistoryService({
     }
   }
 
-  const transactions = await Transaction.find(
+  const transactionsRaw = await Transaction.find(
     filter,
     {
       type: 1,
@@ -55,10 +55,24 @@ export async function getUserTransactionHistoryService({
       createdAt: 1
     }
   )
+    .populate({ path: "account", select: "account_number" })
     .sort({ createdAt: -1 })
     .skip(skip)
     .limit(limit)
-    .lean(); // 🚀 fastest possible read
+    .lean();
+
+  const transactions = transactionsRaw.map((tx) => {
+    const isPopulatedAccount = tx.account && typeof tx.account === "object";
+    const accountIdValue = isPopulatedAccount ? tx.account._id : tx.account;
+    const accountNumber = isPopulatedAccount ? tx.account.account_number : null;
+
+    return {
+      ...tx,
+      account: accountIdValue,
+      accountId: accountIdValue,
+      accountNumber
+    };
+  });
 
   const total = await Transaction.countDocuments(filter);
 
