@@ -8,14 +8,17 @@ app.disable('x-powered-by');
 
 app.use(
   cors({
-    origin: [
-      'http://localhost:3000',
-      'http://localhost:3001',
-      'https://trade-portal-uiub.vercel.app',
-      'https://admin-dashboard-wheat-pi-59.vercel.app',
-      'http://localhost:5173',
-      
-    ],
+origin: [
+  "http://localhost:3000",
+  "http://localhost:3001",
+  "https://trade-portal-uiub.vercel.app",
+  "https://admin-dashboard-wheat-pi-59.vercel.app",
+  "http://localhost:5173",
+  "https://alstrades.com",
+  "https://admin.alstrades.com",
+  "https://user.alstrades.com",
+],
+
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
     allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true

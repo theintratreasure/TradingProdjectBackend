@@ -38,17 +38,26 @@ export async function createDepositService({
     _id: account,
     user_id: userId,
     status: "active",
+    account_type: "live", // ✅ ONLY LIVE ACCOUNT ALLOWED
   }).lean();
 
   if (!userAccount) {
-    throw new Error("Account not found or inactive");
+    throw new Error("Live account not found or inactive");
+  }
+
+  /* ---------------- EXTRA SAFETY (DOUBLE CHECK) ---------------- */
+
+  if (userAccount.account_type !== "live") {
+    throw new Error("Deposits are not allowed in demo accounts");
   }
 
   /* ---------------- FIRST DEPOSIT LOGIC ---------------- */
 
   // If first_deposit flag is FALSE → this is first deposit
   if (userAccount.first_deposit === false) {
-    const plan = await AccountPlan.findById(userAccount.account_plan_id).lean();
+    const plan = await AccountPlan.findById(
+      userAccount.account_plan_id,
+    ).lean();
 
     if (!plan) {
       throw new Error("Account plan not found");
@@ -74,6 +83,7 @@ export async function createDepositService({
 
   return deposit;
 }
+
 
 /**
  * GET USER DEPOSITS (PAGINATED + DATE FILTER)

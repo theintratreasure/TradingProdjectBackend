@@ -44,8 +44,8 @@ export async function createAccount({ userId, account_plan_id, account_type }) {
       account_type: "demo",
     });
 
-    if (demoCount >= 1) {
-      throw new Error("Only one demo account allowed");
+    if (demoCount >= 20 ) {
+      throw new Error("Only 20 demo accounts allowed per user");
     }
   }
 
