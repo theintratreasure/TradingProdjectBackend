@@ -20,7 +20,8 @@ origin: [
 ],
 
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    // Frontend preflight may include Cache-Control/Pragma; allow them explicitly to avoid CORS failures.
+    allowedHeaders: ['Content-Type', 'Authorization', 'Cache-Control', 'Pragma'],
     credentials: true
   })
 );
