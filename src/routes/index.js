@@ -22,6 +22,7 @@ import accountAuthRoutes from "./v1/accountAuth.routes.js";
 import tradeRoutes from "./v1/trade.routes.js";
 import tradeAdminRoutes from "./v1/tradeAdmin.routes.js";
 import deviceRoutes from "./v1/device.routes.js";
+import conversionRoutes from "./v1/conversion.routes.js";
 const router = Router();
 
 
@@ -48,5 +49,6 @@ router.use("/v1/account-auth", accountAuthRoutes);
 router.use("/v1/trade", tradeRoutes);
 router.use("/v1/trade-admin", tradeAdminRoutes);
 router.use("/v1/device", deviceRoutes);
+router.use("/v1/conversion", conversionRoutes);
 
 export default router;
