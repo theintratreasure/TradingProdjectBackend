@@ -2,13 +2,135 @@ import mongoose from "mongoose";
 import Trade from "../models/Trade.model.js";
 import Transaction from "../models/Transaction.model.js";
 import Account from "../models/Account.model.js";
+
+const DATE_FILTERS = new Set([
+  "today",
+  "lastweek",
+  "lastweak",
+  "last3months",
+  "last_3_months",
+  "last3month",
+  "custom",
+]);
+
+function normalizeSymbolFilter(symbol, symbols) {
+  const rawSymbols =
+    symbols !== undefined && symbols !== null && symbols !== ""
+      ? symbols
+      : symbol;
+
+  if (!rawSymbols) {
+    return [];
+  }
+
+  const values = Array.isArray(rawSymbols)
+    ? rawSymbols
+    : String(rawSymbols).split(",");
+
+  const normalized = values
+    .map((item) => String(item).trim().toUpperCase())
+    .filter(Boolean);
+
+  return [...new Set(normalized)];
+}
+
+function parseDate(value, fieldName) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    throw new Error(`Invalid ${fieldName}`);
+  }
+  return date;
+}
+
+function buildOpenTimeFilter({
+  filter,
+  from,
+  to,
+  startDate,
+  endDate,
+}) {
+  const selectedFilter = filter ? String(filter).toLowerCase() : null;
+  const now = new Date();
+  const range = {};
+
+  const customFrom = from || startDate;
+  const customTo = to || endDate;
+
+  if (selectedFilter && !DATE_FILTERS.has(selectedFilter)) {
+    throw new Error(
+      "Invalid filter. Use: today, lastweek, last3months, custom"
+    );
+  }
+
+  if (selectedFilter === "today") {
+    const dayStart = new Date(now);
+    dayStart.setHours(0, 0, 0, 0);
+    range.$gte = dayStart;
+    range.$lte = now;
+    return range;
+  }
+
+  if (selectedFilter === "lastweek" || selectedFilter === "lastweak") {
+    const weekStart = new Date(now);
+    weekStart.setDate(weekStart.getDate() - 7);
+    weekStart.setHours(0, 0, 0, 0);
+    range.$gte = weekStart;
+    range.$lte = now;
+    return range;
+  }
+
+  if (
+    selectedFilter === "last3months" ||
+    selectedFilter === "last_3_months" ||
+    selectedFilter === "last3month"
+  ) {
+    const monthsStart = new Date(now);
+    monthsStart.setMonth(monthsStart.getMonth() - 3);
+    monthsStart.setHours(0, 0, 0, 0);
+    range.$gte = monthsStart;
+    range.$lte = now;
+    return range;
+  }
+
+  if (selectedFilter === "custom") {
+    if (!customFrom || !customTo) {
+      throw new Error("For custom filter, from/startDate and to/endDate are required");
+    }
+
+    const start = parseDate(customFrom, "from/startDate");
+    const end = parseDate(customTo, "to/endDate");
+    if (start > end) {
+      throw new Error("from/startDate must be less than or equal to to/endDate");
+    }
+
+    range.$gte = start;
+    range.$lte = end;
+    return range;
+  }
+
+  if (customFrom || customTo) {
+    if (customFrom) range.$gte = parseDate(customFrom, "from/startDate");
+    if (customTo) range.$lte = parseDate(customTo, "to/endDate");
+    if (range.$gte && range.$lte && range.$gte > range.$lte) {
+      throw new Error("from/startDate must be less than or equal to to/endDate");
+    }
+    return range;
+  }
+
+  return null;
+}
+
 export async function getOrdersService({
   accountId,
   page = 1,
   limit = 20,
   symbol,
+  symbols,
+  filter,
   from,
   to,
+  startDate,
+  endDate,
 }) {
   /* =========================
      SAFE ObjectId CAST
@@ -23,14 +145,22 @@ export async function getOrdersService({
     status: { $in: ["CLOSED", "CANCELLED"] },
   };
 
-  if (symbol) {
-    match.symbol = symbol;
+  const symbolFilter = normalizeSymbolFilter(symbol, symbols);
+  if (symbolFilter.length === 1) {
+    match.symbol = symbolFilter[0];
+  } else if (symbolFilter.length > 1) {
+    match.symbol = { $in: symbolFilter };
   }
 
-  if (from || to) {
-    match.openTime = {};
-    if (from) match.openTime.$gte = new Date(from);
-    if (to) match.openTime.$lte = new Date(to);
+  const openTimeFilter = buildOpenTimeFilter({
+    filter,
+    from,
+    to,
+    startDate,
+    endDate,
+  });
+  if (openTimeFilter) {
+    match.openTime = openTimeFilter;
   }
 
   /* =========================
@@ -121,8 +251,12 @@ export async function getDealsService({
   page = 1,
   limit = 20,
   symbol,
+  symbols,
+  filter,
   from,
   to,
+  startDate,
+  endDate,
 }) {
   const accountObjectId = new mongoose.Types.ObjectId(accountId);
 
@@ -133,14 +267,22 @@ export async function getDealsService({
     accountId: accountObjectId,
   };
 
-  if (symbol) {
-    match.symbol = symbol;
+  const symbolFilter = normalizeSymbolFilter(symbol, symbols);
+  if (symbolFilter.length === 1) {
+    match.symbol = symbolFilter[0];
+  } else if (symbolFilter.length > 1) {
+    match.symbol = { $in: symbolFilter };
   }
 
-  if (from || to) {
-    match.openTime = {};
-    if (from) match.openTime.$gte = new Date(from);
-    if (to) match.openTime.$lte = new Date(to);
+  const openTimeFilter = buildOpenTimeFilter({
+    filter,
+    from,
+    to,
+    startDate,
+    endDate,
+  });
+  if (openTimeFilter) {
+    match.openTime = openTimeFilter;
   }
 
   /* =========================
@@ -330,8 +472,12 @@ export async function getPositionsService({
   page,
   limit,
   symbol,
+  symbols,
+  filter,
   from,
   to,
+  startDate,
+  endDate,
   status,
 }) {
   const accountObjectId = new mongoose.Types.ObjectId(accountId);
@@ -343,18 +489,26 @@ export async function getPositionsService({
     accountId: accountObjectId,
   };
 
-  if (symbol) {
-    match.symbol = symbol;
+  const symbolFilter = normalizeSymbolFilter(symbol, symbols);
+  if (symbolFilter.length === 1) {
+    match.symbol = symbolFilter[0];
+  } else if (symbolFilter.length > 1) {
+    match.symbol = { $in: symbolFilter };
   }
 
   if (status && ["OPEN", "CLOSED"].includes(status)) {
     match.status = status;
   }
 
-  if (from || to) {
-    match.openTime = {};
-    if (from) match.openTime.$gte = new Date(from);
-    if (to) match.openTime.$lte = new Date(to);
+  const openTimeFilter = buildOpenTimeFilter({
+    filter,
+    from,
+    to,
+    startDate,
+    endDate,
+  });
+  if (openTimeFilter) {
+    match.openTime = openTimeFilter;
   }
 
   /* =========================

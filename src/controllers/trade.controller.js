@@ -267,7 +267,17 @@ export async function getOrdersController(req, res) {
   try {
     const { userId, accountId } = req.account;
     console.log("ACCOUNT ID IN GET ORDERS:", accountId);
-    const { page = 1, limit = 20, symbol, from, to } = req.query;
+    const {
+      page = 1,
+      limit = 20,
+      symbol,
+      symbols,
+      filter,
+      from,
+      to,
+      startDate,
+      endDate,
+    } = req.query;
 
     await verifyAccountOwnership(userId, accountId);
 
@@ -276,8 +286,12 @@ export async function getOrdersController(req, res) {
       page: Number(page),
       limit: Number(limit),
       symbol,
+      symbols,
+      filter,
       from,
       to,
+      startDate,
+      endDate,
     });
 
     return res.json({ status: "success", ...result });
@@ -295,7 +309,17 @@ export async function getOrdersController(req, res) {
 export async function getDealsController(req, res) {
   try {
     const { userId, accountId } = req.account;
-    const { page = 1, limit = 20, symbol, from, to } = req.query;
+    const {
+      page = 1,
+      limit = 20,
+      symbol,
+      symbols,
+      filter,
+      from,
+      to,
+      startDate,
+      endDate,
+    } = req.query;
 
     await verifyAccountOwnership(userId, accountId);
 
@@ -304,8 +328,12 @@ export async function getDealsController(req, res) {
       page: Number(page),
       limit: Number(limit),
       symbol,
+      symbols,
+      filter,
       from,
       to,
+      startDate,
+      endDate,
     });
 
     return res.json({ status: "success", ...data });
@@ -344,7 +372,18 @@ export async function getTradeSummaryController(req, res) {
 export async function getPositionsController(req, res) {
   try {
     const { userId, accountId } = req.account;
-    const { page = 1, limit = 20, symbol, from, to, status } = req.query;
+    const {
+      page = 1,
+      limit = 20,
+      symbol,
+      symbols,
+      filter,
+      from,
+      to,
+      startDate,
+      endDate,
+      status,
+    } = req.query;
 
     await verifyAccountOwnership(userId, accountId);
 
@@ -353,8 +392,12 @@ export async function getPositionsController(req, res) {
       page: Number(page),
       limit: Number(limit),
       symbol,
+      symbols,
+      filter,
       from,
       to,
+      startDate,
+      endDate,
       status,
     });
 

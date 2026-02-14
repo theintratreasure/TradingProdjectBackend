@@ -39,8 +39,10 @@ router.post("/position/close", accountAuthMiddleware, closePosition);
 ========================= */
 router.get("/orders", accountAuthMiddleware, getOrdersController);
 router.get("/deals", accountAuthMiddleware, getDealsController);
+router.get("/history", accountAuthMiddleware, getDealsController);
 router.get("/summary", accountAuthMiddleware, getTradeSummaryController);
 router.get("/positions", accountAuthMiddleware, getPositionsController);
+router.get("/position", accountAuthMiddleware, getPositionsController);
 
 /* =========================
    ACCOUNT DETAILS
