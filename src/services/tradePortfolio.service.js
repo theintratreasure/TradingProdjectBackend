@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import Account from "../models/Account.model.js";
 import Trade from "../models/Trade.model.js";
+import { tradeEngine } from "../trade-engine/bootstrap.js";
 
 function round2(value) {
   const n = Number(value);
@@ -165,11 +166,34 @@ export async function getUserPortfolioSummaryService(userId) {
   };
 
   const walletBalance = round2(liveTotals.totalBalance);
-  const openProfit = round2(
+  const openProfitFromDb = round2(
     Number(openStats.openGrossPnL) -
       Number(openStats.openCommission) -
       Number(openStats.openSwap)
   );
+  const liveEngineAccountIds = liveAccountIds
+    .map((id) => String(id))
+    .filter((id) => tradeEngine.accounts.has(id));
+
+  let engineOpenPnL = 0;
+  let engineActiveTrades = 0;
+
+  for (const accountId of liveEngineAccountIds) {
+    const account = tradeEngine.accounts.get(accountId);
+    if (!account?.positions) continue;
+
+    for (const pos of account.positions.values()) {
+      engineOpenPnL += Number(pos?.floatingPnL) || 0;
+      engineActiveTrades += 1;
+    }
+  }
+
+  const hasEngineData = liveEngineAccountIds.length > 0;
+  const openProfit = hasEngineData ? round2(engineOpenPnL) : openProfitFromDb;
+  const activeTrades = hasEngineData
+    ? engineActiveTrades
+    : Number(openStats.activeTrades) || 0;
+
   const totalPortfolioValue = round2(walletBalance + openProfit);
   const todayPnL = round2(Number(closedStats.todayRealizedPnL) + openProfit);
 
@@ -187,7 +211,7 @@ export async function getUserPortfolioSummaryService(userId) {
       walletBalance,
       demoBalance,
       drawdownPercent,
-      activeTrades: Number(openStats.activeTrades) || 0,
+      activeTrades,
       totalAccounts: liveAccounts.length,
       activeAccounts: liveTotals.activeAccounts,
       totalEquity: round2(liveTotals.totalEquity),
