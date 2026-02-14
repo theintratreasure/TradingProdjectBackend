@@ -8,7 +8,8 @@ import {
   logoutService,
   verifyEmailService,
   resendEmailVerificationService,
-  adminChangeUserPasswordService
+  adminChangeUserPasswordService,
+  changeMyPasswordService
 } from '../services/auth.service.js';
 
 /* ================= SIGNUP ================= */
@@ -242,6 +243,38 @@ export async function adminChangeUserPassword(req, res) {
     return res.json({
       success: true,
       message: 'Password updated successfully',
+      data
+    });
+  } catch (e) {
+    return res.status(400).json({
+      success: false,
+      message: e.message
+    });
+  }
+}
+
+/* ================= USER CHANGE OWN PASSWORD ================= */
+export async function changeMyPassword(req, res) {
+  try {
+    const userId = req.user?._id;
+    const { oldPassword, newPassword } = req.body;
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Unauthorized'
+      });
+    }
+
+    const data = await changeMyPasswordService(
+      userId,
+      oldPassword,
+      newPassword
+    );
+
+    return res.json({
+      success: true,
+      message: 'Password changed successfully',
       data
     });
   } catch (e) {

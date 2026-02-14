@@ -10,7 +10,8 @@ import {
   logout,
   verifyEmail,
   resendVerifyEmail,
-  adminChangeUserPassword
+  adminChangeUserPassword,
+  changeMyPassword
 } from '../../controllers/auth.controller.js';
 import { authMiddleware } from '../../middlewares/auth.middleware.js';
 import { adminAuth } from '../../middlewares/adminAuth.middleware.js';
@@ -27,5 +28,6 @@ router.post('/forgot-password', forgotPassword);
 router.post('/reset-password', resetPassword);
 router.post('/refresh-token', refreshToken);
 router.post('/logout', logout);
+router.patch('/change-password', authMiddleware, changeMyPassword);
 router.patch('/admin/user/:userId/password', authMiddleware, adminAuth, adminChangeUserPassword);
 export default router;

@@ -649,3 +649,54 @@ export async function adminChangeUserPasswordService(userId, newPassword) {
 
   return { userId };
 }
+
+/* ================= USER CHANGE OWN PASSWORD ================= */
+export async function changeMyPasswordService(userId, oldPassword, newPassword) {
+  if (!mongoose.isValidObjectId(userId)) {
+    throw new Error('Invalid userId');
+  }
+
+  if (!oldPassword || typeof oldPassword !== 'string') {
+    throw new Error('Old password is required');
+  }
+
+  if (!newPassword || typeof newPassword !== 'string') {
+    throw new Error('New password is required');
+  }
+
+  if (oldPassword === newPassword) {
+    throw new Error('New password must be different from old password');
+  }
+
+  const auth = await Auth.findOne({ user_id: userId });
+  if (!auth) {
+    throw new Error('Auth record not found');
+  }
+
+  const isOldPasswordValid = await comparePassword(oldPassword, auth.password_hash);
+  if (!isOldPasswordValid) {
+    throw new Error('Old password is incorrect');
+  }
+
+  const passwordHash = await hashPassword(newPassword);
+
+  await Auth.updateOne(
+    { _id: auth._id },
+    {
+      $set: {
+        password_hash: passwordHash,
+        login_attempts: 0
+      },
+      $unset: {
+        reset_token_hash: 1,
+        reset_token_expires_at: 1,
+        refresh_token_hash: 1,
+        refresh_token_expires_at: 1,
+        refresh_token_ip: 1,
+        refresh_token_device: 1
+      }
+    }
+  );
+
+  return { userId };
+}

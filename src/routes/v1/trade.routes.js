@@ -11,8 +11,10 @@ import {
   getTradeSummaryController,
   getPositionsController,
   getSingleAccountController,
+  getUserPortfolioSummaryController,
 } from "../../controllers/trade.controller.js";
 import { accountAuthMiddleware } from "../../middlewares/accountAuth.middleware.js";
+import { authMiddleware } from "../../middlewares/auth.middleware.js";
 
 const router = Router();
 
@@ -48,4 +50,5 @@ router.get("/position", accountAuthMiddleware, getPositionsController);
    ACCOUNT DETAILS
 ========================= */
 router.get("/account",accountAuthMiddleware,getSingleAccountController);
+router.get("/portfolio-summary", authMiddleware, getUserPortfolioSummaryController);
 export default router;

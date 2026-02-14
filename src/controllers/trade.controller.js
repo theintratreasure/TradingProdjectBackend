@@ -7,6 +7,7 @@ import {
   getSingleAccountService,
   getTradeSummaryService,
 } from "../services/tradeOrder.service.js";
+import { getUserPortfolioSummaryService } from "../services/tradePortfolio.service.js";
 
 /* =========================
    COMMON: ACCOUNT OWNERSHIP
@@ -429,6 +430,34 @@ export async function getSingleAccountController(req, res) {
     return res.status(400).json({
       status: "error",
       message: err.message || "Failed to load account",
+    });
+  }
+}
+
+/* =========================
+   USER PORTFOLIO SUMMARY (GET)
+========================= */
+export async function getUserPortfolioSummaryController(req, res) {
+  try {
+    const userId = req.user?._id;
+
+    if (!userId) {
+      return res.status(401).json({
+        status: "error",
+        message: "Unauthorized",
+      });
+    }
+
+    const data = await getUserPortfolioSummaryService(userId);
+
+    return res.json({
+      status: "success",
+      data,
+    });
+  } catch (err) {
+    return res.status(400).json({
+      status: "error",
+      message: err.message || "Failed to load portfolio summary",
     });
   }
 }
