@@ -1,6 +1,7 @@
 import redis from '../config/redis.js';
 import Instrument from '../models/Instrument.model.js';
 import EngineSync from '../trade-engine/EngineSync.js';
+import { publishSymbolRemove, publishSymbolUpsert } from '../trade-engine/EngineSyncBus.js';
 
 const LIST_TTL = 300;
 const COUNT_TTL = 300;
@@ -89,6 +90,7 @@ export const createInstrumentService = async (payload) => {
 
   // Sync symbol into trade engine (RAM)
   EngineSync.loadSymbolFromInstrument(instrument);
+  publishSymbolUpsert(instrument);
 
   return instrument;
 };
@@ -236,6 +238,7 @@ export const updateInstrumentService = async (id, payload) => {
 
   // Sync symbol into trade engine (RAM)
   EngineSync.loadSymbolFromInstrument(updated);
+  publishSymbolUpsert(updated);
 
   return updated;
 };
@@ -262,6 +265,7 @@ export const deleteInstrumentService = async (id) => {
 
   // Remove symbol from trade engine (RAM)
   EngineSync.removeInstrumentByCode(instrument.code);
+  publishSymbolRemove(instrument.code);
 
   return instrument;
 };

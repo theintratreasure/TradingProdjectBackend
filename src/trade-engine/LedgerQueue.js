@@ -4,6 +4,7 @@ import Transaction from "../models/Transaction.model.js";
 import PendingOrder from "../models/PendingOrder.model.js";
 import Brokerage from "../models/Brokerage.model.js";
 import { engineEvents } from "./EngineEvents.js";
+import { publishAccountBalance } from "./EngineSyncBus.js";
 
 class LedgerQueue {
   constructor() {
@@ -175,6 +176,9 @@ class LedgerQueue {
       { _id: accountId },
       { $set: { balance: newBalance } }
     );
+
+    // Fanout: keep other Node workers' RAM in sync with the DB balance update.
+    publishAccountBalance(String(accountId), newBalance);
 
     const txn = await Transaction.create({
       user: userId || trade.userId,

@@ -17,7 +17,7 @@ export async function bootstrapEngine({ accounts, symbols }) {
       accountId: String(acc._id),
       balance: acc.balance,
       leverage: acc.leverage,
-      userId: String(acc._id), // required
+      userId: acc.user_id != null ? String(acc.user_id) : undefined,
       lastIp: acc.lastIp || "SYSTEM",
 
       // charges

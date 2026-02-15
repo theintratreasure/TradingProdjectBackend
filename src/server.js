@@ -13,6 +13,7 @@ import { marketService } from "./services/market.service.js";
 
 // 🔥 TRADE ENGINE
 import { bootstrapEngine, tradeEngine } from "./trade-engine/bootstrap.js";
+import { startEngineSyncBus } from "./trade-engine/EngineSyncBus.js";
 import Account from "./models/Account.model.js";
 import Instrument from "./models/Instrument.model.js";
 
@@ -70,6 +71,9 @@ const symbols = await Instrument.find(
   });
 
   console.log("[TRADE ENGINE] RAM READY");
+
+  // Redis pub/sub fanout so DB-driven changes sync across all Node workers.
+  startEngineSyncBus();
 
   // Warm up market status in RAM so market-hours validation works immediately.
   // (The cron will keep refreshing it every minute.)

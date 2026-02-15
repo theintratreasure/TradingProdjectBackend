@@ -5,6 +5,7 @@ import AccountAuth from "../models/AccountAuth.model.js";
 import User from "../models/User.model.js";
 
 import EngineSync from "../trade-engine/EngineSync.js";
+import { publishAccountSnapshot } from "../trade-engine/EngineSyncBus.js";
 
 import { sendAccountCreatedMail } from "../utils/mail.util.js";
 import { generateAccountNumber } from "../utils/accountNumber.util.js";
@@ -155,6 +156,7 @@ export async function createAccount({ userId, account_plan_id, account_type }) {
   /* ================= ENGINE SYNC ================= */
 
   await EngineSync.onAccountCreated(account._id);
+  publishAccountSnapshot(account);
 
   /* ================= MAIL ================= */
 
@@ -290,6 +292,7 @@ export async function resetDemoAccount({ userId, accountId }) {
 
   // ✅ ENGINE UPDATE
   await EngineSync.syncAccount(account._id);
+  publishAccountSnapshot(account);
 
   return account;
 }
@@ -330,6 +333,7 @@ export async function setAccountLeverage({ userId, accountId, leverage }) {
 
   // ✅ ENGINE UPDATE
   await EngineSync.syncAccount(account._id);
+  publishAccountSnapshot(account);
 
   return {
     account_id: account._id,
@@ -582,6 +586,7 @@ export async function adminUpdateAccountService({ accountId, payload = {} }) {
   await account.save();
 
   await EngineSync.syncAccount(account._id);
+  publishAccountSnapshot(account);
 
   return account.toObject();
 }

@@ -8,6 +8,8 @@ import User from "../models/User.model.js";
 import Transaction from "../models/Transaction.model.js";
 import redis from "../config/redis.js";
 import EngineSync from "../trade-engine/EngineSync.js";
+import { publishAccountBalance } from "../trade-engine/EngineSyncBus.js";
+import { createReferralRewardEligibility } from "./referral.service.js";
 
 export async function createDepositService({
   userId,
@@ -428,6 +430,8 @@ export async function adminSearchDepositsService(query = {}) {
 ========================== */
 export async function approveDepositService(depositId, adminId) {
   const session = await mongoose.startSession();
+  let engineAccountId = null;
+  let engineNewBalance = null;
 
   try {
     await session.withTransaction(async () => {
@@ -451,6 +455,7 @@ export async function approveDepositService(depositId, adminId) {
       if (!account) {
         throw new Error("Account not found");
       }
+      const isFirstDeposit = account.first_deposit === false;
 
       /* =========================
          3. LIVE ACCOUNT CHECK
@@ -488,6 +493,17 @@ export async function approveDepositService(depositId, adminId) {
         { session },
       );
 
+      // Create referral reward eligibility (one-time) on first approved deposit.
+      if (isFirstDeposit) {
+        await createReferralRewardEligibility({
+          referredUserId: account.user_id,
+          referredAccountId: account._id,
+          planId: account.account_plan_id,
+          depositId: deposit._id,
+          session,
+        });
+      }
+
       /* =========================
          7. TRANSACTION LOG
       ========================== */
@@ -508,12 +524,25 @@ export async function approveDepositService(depositId, adminId) {
         ],
         { session },
       );
+
+      engineAccountId = String(account._id);
+      engineNewBalance = Number(newBalance);
     });
 
     /* =========================
        SYNC ENGINE (AFTER COMMIT)
     ========================== */
-    await EngineSync.onDeposit(deposit.account, deposit.amount);
+    try {
+      if (engineAccountId && Number.isFinite(engineNewBalance)) {
+        publishAccountBalance(engineAccountId, engineNewBalance);
+        await EngineSync.updateBalance(engineAccountId, engineNewBalance);
+      }
+    } catch (e) {
+      console.error(
+        "[ENGINE_SYNC] updateBalance failed (approveDepositService)",
+        e && e.message ? e.message : e,
+      );
+    }
 
     return {
       success: true,
@@ -615,6 +644,7 @@ export async function adminCreateDepositService({
 
   const session = await mongoose.startSession();
   let createdDeposit = null;
+  let engineNewBalance = null;
 
   try {
     await session.withTransaction(async () => {
@@ -626,8 +656,10 @@ export async function adminCreateDepositService({
       if (!account) {
         throw new Error("Account not found or inactive");
       }
+      const isFirstDeposit = account.first_deposit === false;
 
       const newBalance = account.balance + amount;
+      engineNewBalance = Number(newBalance);
 
       createdDeposit = await Deposit.create(
         [
@@ -657,6 +689,17 @@ export async function adminCreateDepositService({
         { session },
       );
 
+      // Create referral reward eligibility (one-time) on first approved deposit.
+      if (isFirstDeposit && createdDeposit?.[0]?._id) {
+        await createReferralRewardEligibility({
+          referredUserId: account.user_id,
+          referredAccountId: account._id,
+          planId: account.account_plan_id,
+          depositId: createdDeposit[0]._id,
+          session,
+        });
+      }
+
       await Transaction.create(
         [
           {
@@ -677,7 +720,17 @@ export async function adminCreateDepositService({
     });
 
     // Sync engine after DB commit
-    await EngineSync.onDeposit(accountId, amount);
+    try {
+      if (accountId && Number.isFinite(engineNewBalance)) {
+        publishAccountBalance(accountId, engineNewBalance);
+        await EngineSync.updateBalance(String(accountId), engineNewBalance);
+      }
+    } catch (e) {
+      console.error(
+        "[ENGINE_SYNC] updateBalance failed (adminCreateDepositService)",
+        e && e.message ? e.message : e,
+      );
+    }
 
     return createdDeposit?.[0] || null;
   } finally {

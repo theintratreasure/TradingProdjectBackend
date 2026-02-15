@@ -6,6 +6,7 @@ import Transaction from "../models/Transaction.model.js";
 import Trade from "../models/Trade.model.js";
 
 import EngineSync from "../trade-engine/EngineSync.js";
+import { publishAccountBalance } from "../trade-engine/EngineSyncBus.js";
 
 /* =====================================================
    HELPERS
@@ -300,11 +301,14 @@ export async function createInternalTransferService({
     /* ================= ENGINE SYNC ================= */
 
     try {
-      await EngineSync.onInternalTransfer(
-        String(fromAcc._id),
-        String(toAcc._id),
-        amount
-      );
+      const fromId = String(fromAcc._id);
+      const toId = String(toAcc._id);
+
+      publishAccountBalance(fromId, fromNew);
+      publishAccountBalance(toId, toNew);
+
+      await EngineSync.updateBalance(fromId, fromNew);
+      await EngineSync.updateBalance(toId, toNew);
     } catch (error) {
       console.error(
         "[ENGINE_SYNC] onInternalTransfer failed (createInternalTransferService)",
@@ -504,11 +508,14 @@ export async function adminCreateInternalTransferService({
     session.endSession();
 
     try {
-      await EngineSync.onInternalTransfer(
-        String(fromAcc._id),
-        String(toAcc._id),
-        amount,
-      );
+      const fromId = String(fromAcc._id);
+      const toId = String(toAcc._id);
+
+      publishAccountBalance(fromId, fromNew);
+      publishAccountBalance(toId, toNew);
+
+      await EngineSync.updateBalance(fromId, fromNew);
+      await EngineSync.updateBalance(toId, toNew);
     } catch (error) {
       console.error(
         "[ENGINE_SYNC] onInternalTransfer failed (adminCreateInternalTransferService)",

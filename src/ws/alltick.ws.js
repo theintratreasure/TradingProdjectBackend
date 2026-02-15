@@ -13,6 +13,7 @@ import dotenv from "dotenv";
 import Redis from "ioredis";
 import { HighLowService } from "../services/highlow.service.js";
 import { tradeEngine } from "../trade-engine/bootstrap.js";
+import EngineSync from "../trade-engine/EngineSync.js";
 import { engineEvents } from "../trade-engine/EngineEvents.js";
 
 dotenv.config();
@@ -138,22 +139,28 @@ function findSymbolInEngine(symbol) {
 }
 
 // attempt to load account into engine memory (subscribe-time)
-// only works if tradeEngine exposes loadAccount(accountId) async function
 async function ensureEngineAccount(accountId) {
   if (!accountId || !tradeEngine) return null;
-  let acc = tradeEngine.accounts && tradeEngine.accounts.get(accountId);
+  const id = String(accountId);
+  let acc = tradeEngine.accounts && tradeEngine.accounts.get(id);
   if (acc) return acc;
-  if (typeof tradeEngine.loadAccount === "function") {
-    try {
-      acc = await tradeEngine.loadAccount(accountId);
-      INFO("ensureEngineAccount: loaded account into engine", accountId, !!acc ? "OK" : "FAILED");
-      return acc;
-    } catch (err) {
-      DBG("ensureEngineAccount loadAccount threw", err && err.message ? err.message : err);
-      return null;
-    }
+
+  try {
+    await EngineSync.syncAccount(id);
+    acc = tradeEngine.accounts && tradeEngine.accounts.get(id);
+    INFO(
+      "ensureEngineAccount: synced account into engine",
+      id,
+      acc ? "OK" : "FAILED",
+    );
+    return acc || null;
+  } catch (err) {
+    DBG(
+      "ensureEngineAccount syncAccount threw",
+      err && err.message ? err.message : err,
+    );
+    return null;
   }
-  return null;
 }
 
 // ========================
@@ -486,14 +493,21 @@ function broadcastData(market, data) {
       const acc = ws.engineAccount || null;
 
       // background lazy load: try to load if accountId present but engineAccount missing
-      if (!acc && ws.accountId && typeof tradeEngine?.loadAccount === "function") {
-        // don't await here, load in background and it will affect future ticks
-        tradeEngine.loadAccount(ws.accountId).then((loaded) => {
-          if (loaded) {
-            DBG("lazy-loaded account for client", id, ws.accountId);
-            ws.engineAccount = loaded;
-          }
-        }).catch(() => {});
+      if (!acc && ws.accountId && !ws._engineAccountLoading) {
+        ws._engineAccountLoading = true;
+        // don't await here, sync in background and it will affect future ticks
+        EngineSync.syncAccount(ws.accountId)
+          .then(() => {
+            const loaded = tradeEngine.accounts.get(String(ws.accountId)) || null;
+            if (loaded) {
+              DBG("lazy-loaded account for client", id, ws.accountId);
+              ws.engineAccount = loaded;
+            }
+          })
+          .catch(() => {})
+          .finally(() => {
+            ws._engineAccountLoading = false;
+          });
       }
 
       let appliedThisClient = false;
@@ -848,7 +862,7 @@ export async function handleClientMessage(clientWs, msg) {
 
         // try to resolve engine account now (await if loader available)
         let acc = tradeEngine.accounts && tradeEngine.accounts.get(accountId);
-        if (!acc && typeof tradeEngine?.loadAccount === "function") {
+        if (!acc) {
           try {
             acc = await ensureEngineAccount(accountId);
           } catch {}
@@ -919,7 +933,7 @@ export async function handleClientMessage(clientWs, msg) {
 
       // set engine account reference (try load if missing)
       let acc = tradeEngine.accounts && tradeEngine.accounts.get(accountId);
-      if (!acc && typeof tradeEngine?.loadAccount === "function") {
+      if (!acc) {
         try {
           acc = await ensureEngineAccount(accountId);
         } catch {}

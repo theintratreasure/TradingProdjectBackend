@@ -1,5 +1,6 @@
 import { marketService } from '../services/market.service.js';
 import { tradeEngine } from '../trade-engine/bootstrap.js';
+import { publishMarketStatus } from '../trade-engine/EngineSyncBus.js';
 
 export const getMarketSchedule = async (req, res) => {
   const { segment } = req.params;
@@ -21,6 +22,7 @@ export const updateMarketSchedule = async (req, res) => {
     const statusRes = await marketService.getMarketStatus(segment);
     if (statusRes?.data) {
       tradeEngine.setMarketStatus(statusRes.data.segment, statusRes.data);
+      publishMarketStatus(statusRes.data.segment, statusRes.data);
     }
   } catch (err) {
     console.error("[MARKET] status refresh failed after schedule update", err?.message || err);

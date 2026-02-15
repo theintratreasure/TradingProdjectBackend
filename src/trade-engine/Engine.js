@@ -39,14 +39,34 @@ export class Engine {
     commission_per_lot = 0,
     swap_charge = 0,
     spread_enabled = false,
+    status = undefined,
+    account_type = undefined,
   }) {
-    const acc = new AccountState({
-      accountId,
-      balance,
-      leverage,
-      userId,
-      lastIp,
-    });
+    const id = String(accountId);
+    if (!id || id === "undefined" || id === "null") {
+      throw new Error("Invalid accountId");
+    }
+
+    // IMPORTANT:
+    // Do NOT replace an existing in-RAM account object, otherwise we lose positions/pendingOrders
+    // and any websocket references (ws.engineAccount) become stale.
+    const existing = this.accounts.get(id) || null;
+
+    const acc = existing
+      ? existing
+      : new AccountState({
+          accountId: id,
+          balance,
+          leverage,
+          userId,
+          lastIp,
+        });
+
+    // base fields (preserve runtime state like positions/pendingOrders)
+    if (balance !== undefined) acc.balance = Number(balance) || 0;
+    if (leverage !== undefined) acc.leverage = Number(leverage) || 2000;
+    if (userId !== undefined) acc.userId = String(userId);
+    if (lastIp !== undefined) acc.lastIp = lastIp;
 
     // snapshot fields (safe to add directly)
     acc.commission_per_lot =
@@ -56,17 +76,30 @@ export class Engine {
     // per-account spread ON/OFF
     acc.spread_enabled = Boolean(spread_enabled);
 
-    this.accounts.set(accountId, acc);
+    if (status !== undefined) acc.status = String(status);
+    if (account_type !== undefined) acc.account_type = String(account_type);
+
+    // recalc equity/freeMargin after any balance change
+    try {
+      if (typeof acc.recalc === "function") acc.recalc();
+    } catch {}
+
+    if (!existing) {
+      this.accounts.set(id, acc);
+    }
 
     if (DEBUG_LIVE) {
       console.log("[ENGINE][ACCOUNT_LOADED]", {
-        accountId,
+        accountId: id,
+        mode: existing ? "update" : "create",
         balance,
         leverage,
         userId,
         commission_per_lot: acc.commission_per_lot,
         swap_charge: acc.swap_charge,
         spread_enabled: acc.spread_enabled,
+        status: acc.status,
+        account_type: acc.account_type,
       });
     }
   }
@@ -194,6 +227,15 @@ export class Engine {
       stopLoss: trade.stopLoss,
       takeProfit: trade.takeProfit,
     });
+
+    // restore open time from DB (Trade.openTime is a Date)
+    try {
+      const t = trade?.openTime;
+      if (t) {
+        const ts = t instanceof Date ? t.getTime() : new Date(t).getTime();
+        if (Number.isFinite(ts) && ts > 0) position.openTime = ts;
+      }
+    } catch {}
 
     // restore commission/swap if present in DB object (optional)
     if (typeof trade.commission === "number") {

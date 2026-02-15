@@ -5,6 +5,7 @@ import Account from "../models/Account.model.js";
 import Trade from "../models/Trade.model.js";
 import Transaction from "../models/Transaction.model.js";
 import EngineSync from "../trade-engine/EngineSync.js";
+import { publishAccountBalance } from "../trade-engine/EngineSyncBus.js";
 
 function formatYmd(date, timeZone) {
   if (timeZone) {
@@ -241,6 +242,8 @@ export async function runSwapRollover({
         for (const u of updatedInBatch || []) {
           chargedAccounts += 1;
           totalCharged += u.swapToCharge;
+
+          publishAccountBalance(u.accountId, u.balance);
 
           EngineSync.updateBalance(u.accountId, u.balance).catch((err) => {
             console.error("[SWAP_CRON] EngineSync.updateBalance failed:", {

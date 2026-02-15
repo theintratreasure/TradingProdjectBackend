@@ -29,6 +29,18 @@ const referralSchema = new mongoose.Schema(
       default: 0
     },
 
+    referral_balance: {
+      type: Number,
+      default: 0,
+      min: 0
+    },
+
+    total_earned: {
+      type: Number,
+      default: 0,
+      min: 0
+    },
+
     status: {
       type: String,
       enum: ['PENDING', 'CONFIRMED'],

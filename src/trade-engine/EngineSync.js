@@ -15,6 +15,33 @@ class EngineSync {
      LOAD / REFRESH ACCOUNT
   ============================ */
 
+  static applyAccountSnapshot(snapshot) {
+    if (!snapshot || typeof snapshot !== "object") return;
+
+    const accountId = snapshot.accountId ?? snapshot._id ?? snapshot.id;
+    if (!accountId) return;
+
+    tradeEngine.loadAccount({
+      accountId: String(accountId),
+      balance: Number(snapshot.balance),
+      leverage: Number(snapshot.leverage),
+      userId:
+        snapshot.userId != null
+          ? String(snapshot.userId)
+          : snapshot.user_id != null
+            ? String(snapshot.user_id)
+            : null,
+      lastIp: snapshot.lastIp || null,
+
+      commission_per_lot: Number(snapshot.commission_per_lot || 0),
+      swap_charge: Number(snapshot.swap_charge || 0),
+      spread_enabled: snapshot.spread_enabled === true,
+
+      account_type: snapshot.account_type,
+      status: snapshot.status,
+    });
+  }
+
   static async syncAccount(accountId) {
     const account = await AccountModel.findById(accountId).lean();
 
@@ -23,27 +50,7 @@ class EngineSync {
       return;
     }
 
-    tradeEngine.loadAccount({
-      accountId: String(account._id),
-
-      balance: Number(account.balance),
-      leverage: Number(account.leverage),
-
-      // ✅ FIX: user_id field
-      userId: String(account.user_id),
-
-      lastIp: account.lastIp || null,
-
-      commission_per_lot: Number(account.commission_per_lot || 0),
-      swap_charge: Number(account.swap_charge || 0),
-
-      // ✅ IMPORTANT: spread flag
-      spread_enabled: account.spread_enabled === true,
-
-      // optional (future rules)
-      account_type: account.account_type,
-      status: account.status,
-    });
+    this.applyAccountSnapshot(account);
 
     console.log("[ENGINE_SYNC] synced:", {
       id: String(account._id),
@@ -59,18 +66,22 @@ class EngineSync {
   ============================ */
 
   static async updateBalance(accountId, newBalance) {
-    let acc = tradeEngine.accounts.get(String(accountId));
+    const id = String(accountId);
+    let acc = tradeEngine.accounts.get(id);
 
     if (!acc) {
-      await this.syncAccount(accountId);
-      acc = tradeEngine.accounts.get(String(accountId));
+      await this.syncAccount(id);
+      acc = tradeEngine.accounts.get(id);
       if (!acc) return;
     }
 
-    acc.balance = Number(newBalance);
+    const b = Number(newBalance);
+    if (!Number.isFinite(b)) return;
+
+    acc.balance = b;
     acc.recalc();
 
-    console.log("[ENGINE_SYNC] balance updated:", accountId, newBalance);
+    console.log("[ENGINE_SYNC] balance updated:", id, b);
   }
 
   /* ===========================
@@ -106,18 +117,22 @@ class EngineSync {
   ============================ */
 
   static async onDeposit(accountId, amount) {
-    let acc = tradeEngine.accounts.get(String(accountId));
+    const id = String(accountId);
+    let acc = tradeEngine.accounts.get(id);
 
     if (!acc) {
-      await this.syncAccount(accountId);
-      acc = tradeEngine.accounts.get(String(accountId));
-      if (!acc) return;
+      await this.syncAccount(id);
+      // If the account wasn't in RAM, syncAccount() already loaded the latest DB snapshot.
+      return;
     }
 
-    acc.balance = Number(acc.balance + amount);
+    const amt = Number(amount);
+    if (!Number.isFinite(amt) || amt === 0) return;
+
+    acc.balance = Number(acc.balance + amt);
     acc.recalc();
 
-    console.log("[ENGINE_SYNC] deposit:", accountId, amount);
+    console.log("[ENGINE_SYNC] deposit:", id, amt);
   }
 
   /* ===========================
@@ -125,18 +140,22 @@ class EngineSync {
   ============================ */
 
   static async onWithdraw(accountId, amount) {
-    let acc = tradeEngine.accounts.get(String(accountId));
+    const id = String(accountId);
+    let acc = tradeEngine.accounts.get(id);
 
     if (!acc) {
-      await this.syncAccount(accountId);
-      acc = tradeEngine.accounts.get(String(accountId));
-      if (!acc) return;
+      await this.syncAccount(id);
+      // If the account wasn't in RAM, syncAccount() already loaded the latest DB snapshot.
+      return;
     }
 
-    acc.balance = Number(acc.balance - amount);
+    const amt = Number(amount);
+    if (!Number.isFinite(amt) || amt === 0) return;
+
+    acc.balance = Number(acc.balance - amt);
     acc.recalc();
 
-    console.log("[ENGINE_SYNC] withdraw:", accountId, amount);
+    console.log("[ENGINE_SYNC] withdraw:", id, amt);
   }
 
   /* ===========================

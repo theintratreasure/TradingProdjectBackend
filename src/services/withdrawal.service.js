@@ -5,6 +5,7 @@ import Transaction from "../models/Transaction.model.js";
 import User from "../models/User.model.js";
 import Trade from "../models/Trade.model.js";
 import EngineSync from "../trade-engine/EngineSync.js";
+import { publishAccountBalance } from "../trade-engine/EngineSyncBus.js";
 
 /* -------------------- HELPERS -------------------- */
 
@@ -240,6 +241,7 @@ export const adminCreateWithdrawal = async ({
     // Sync engine: update balance (best-effort)
     try {
       if (newBalanceAfter !== null) {
+        publishAccountBalance(String(payload.accountId), Number(newBalanceAfter));
         await EngineSync.updateBalance(
           String(payload.accountId),
           Number(newBalanceAfter),
@@ -279,6 +281,8 @@ export const adminCreateWithdrawal = async ({
  */
 export const createWithdrawal = async ({ userId, ipAddress, payload }) => {
   const session = await mongoose.startSession();
+  let engineAccountId = null;
+  let engineNewBalance = null;
 
   try {
     const { accountId, amount, method, payout } = payload;
@@ -394,18 +398,8 @@ export const createWithdrawal = async ({ userId, ipAddress, payload }) => {
 
       await account.save({ session });
 
-      // Sync engine: update balance in trade engine (best-effort, log on failure)
-      try {
-        await EngineSync.updateBalance(
-          String(account._id),
-          Number(account.balance),
-        );
-      } catch (e) {
-        console.error(
-          "[ENGINE_SYNC] updateBalance failed (createWithdrawal)",
-          e && e.message ? e.message : e,
-        );
-      }
+      engineAccountId = String(account._id);
+      engineNewBalance = Number(account.balance);
 
       /* =========================
          CREATE WITHDRAWAL
@@ -457,6 +451,19 @@ export const createWithdrawal = async ({ userId, ipAddress, payload }) => {
         { session },
       );
     });
+
+    // Sync engine after DB commit
+    try {
+      if (engineAccountId && Number.isFinite(engineNewBalance)) {
+        publishAccountBalance(engineAccountId, engineNewBalance);
+        await EngineSync.updateBalance(engineAccountId, engineNewBalance);
+      }
+    } catch (e) {
+      console.error(
+        "[ENGINE_SYNC] updateBalance failed (createWithdrawal)",
+        e && e.message ? e.message : e,
+      );
+    }
 
     return {
       ok: true,
@@ -828,19 +835,6 @@ export const adminApproveWithdrawal = async ({ adminId, withdrawalId }) => {
 
       await account.save({ session });
 
-      // Sync engine: update balance (best-effort)
-      try {
-        await EngineSync.updateBalance(
-          String(account._id),
-          Number(account.balance),
-        );
-      } catch (e) {
-        console.error(
-          "[ENGINE_SYNC] updateBalance failed (adminApproveWithdrawal)",
-          e && e.message ? e.message : e,
-        );
-      }
-
       withdrawal.status = "COMPLETED";
       withdrawal.actionBy = adminId;
       withdrawal.actionAt = new Date();
@@ -895,6 +889,8 @@ export const adminRejectWithdrawal = async ({
   rejectionReason,
 }) => {
   const session = await mongoose.startSession();
+  let engineAccountId = null;
+  let engineNewBalance = null;
 
   try {
     if (!mongoose.isValidObjectId(withdrawalId)) {
@@ -952,18 +948,8 @@ export const adminRejectWithdrawal = async ({
 
       await account.save({ session });
 
-      // Sync engine: update balance (best-effort)
-      try {
-        await EngineSync.updateBalance(
-          String(account._id),
-          Number(account.balance),
-        );
-      } catch (e) {
-        console.error(
-          "[ENGINE_SYNC] updateBalance failed (adminRejectWithdrawal)",
-          e && e.message ? e.message : e,
-        );
-      }
+      engineAccountId = String(account._id);
+      engineNewBalance = Number(account.balance);
 
       withdrawal.status = "REJECTED";
       withdrawal.rejectionReason = reason;
@@ -989,6 +975,19 @@ export const adminRejectWithdrawal = async ({
         { session },
       );
     });
+
+    // Sync engine after DB commit
+    try {
+      if (engineAccountId && Number.isFinite(engineNewBalance)) {
+        publishAccountBalance(engineAccountId, engineNewBalance);
+        await EngineSync.updateBalance(engineAccountId, engineNewBalance);
+      }
+    } catch (e) {
+      console.error(
+        "[ENGINE_SYNC] updateBalance failed (adminRejectWithdrawal)",
+        e && e.message ? e.message : e,
+      );
+    }
 
     return {
       ok: true,
