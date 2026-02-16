@@ -15,7 +15,7 @@ export function generateAccountNumber() {
   const randomPart = Math.floor(1000 + Math.random() * 9000).toString();
 
   // Example: AC8394214827
-  return `AC${timePart}${randomPart}`;
+  return `${timePart}${randomPart}`;
 }
 
 /**
