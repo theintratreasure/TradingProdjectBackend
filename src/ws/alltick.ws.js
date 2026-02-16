@@ -1037,6 +1037,21 @@ export async function handleClientMessage(clientWs, msg) {
             accountId,
             balance: Number(account.balance?.toFixed ? account.balance.toFixed(2) : account.balance),
             equity: Number(account.equity?.toFixed ? account.equity.toFixed(2) : account.equity),
+            bonusBalance: Number(
+              account.bonus_balance?.toFixed
+                ? account.bonus_balance.toFixed(2)
+                : account.bonus_balance || 0,
+            ),
+            bonusLive: Number(
+              account.bonus_live?.toFixed
+                ? account.bonus_live.toFixed(2)
+                : account.bonus_live || 0,
+            ),
+            bonusPercent: Number(
+              account.bonus_percent?.toFixed
+                ? account.bonus_percent.toFixed(2)
+                : account.bonus_percent || 0,
+            ),
             usedMargin: Number(account.usedMargin?.toFixed ? account.usedMargin.toFixed(2) : account.usedMargin),
             freeMargin: Number(account.freeMargin?.toFixed ? account.freeMargin.toFixed(2) : account.freeMargin),
           };

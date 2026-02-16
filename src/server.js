@@ -16,6 +16,7 @@ import { bootstrapEngine, tradeEngine } from "./trade-engine/bootstrap.js";
 import { startEngineSyncBus } from "./trade-engine/EngineSyncBus.js";
 import Account from "./models/Account.model.js";
 import Instrument from "./models/Instrument.model.js";
+import BonusSetting from "./models/BonusSetting.model.js";
 
 const PORT = Number(process.env.PORT || 4000);
 
@@ -34,31 +35,52 @@ async function start() {
   // =========================
   // 2️⃣ LOAD DATA FROM DB
   // =========================
-const accounts = await Account.find(
-  { status: "active" },
-  {
-    balance: 1,
-    leverage: 1,
-    user_id: 1,
-    commission_per_lot: 1,
-    swap_charge: 1,
-    spread_enabled: 1
-  }
-).lean();
+  try {
+    const bonusSetting = await BonusSetting.findOne({ key: "GLOBAL" }).lean();
+    const bonusEnabled =
+      bonusSetting?.bonus_enabled !== undefined
+        ? Boolean(bonusSetting.bonus_enabled)
+        : true;
+    const defaultBonusPercent = Number(
+      bonusSetting?.default_bonus_percent || 0,
+    );
 
-
-const symbols = await Instrument.find(
-  { isTradeable: true },
-  {
-    code: 1,
-    segment: 1,
-    contractSize: 1,
-    maxLeverage: 1,
-    spread: 1,
-    tickSize: 1,
-    pricePrecision: 1,
+    if (typeof tradeEngine.setBonusSettings === "function") {
+      tradeEngine.setBonusSettings({
+        bonus_enabled: bonusEnabled,
+        default_bonus_percent: defaultBonusPercent,
+      });
+    }
+  } catch (err) {
+    console.warn("[BONUS] settings preload failed:", err?.message || err);
   }
-).lean();
+
+  const accounts = await Account.find(
+    { status: "active" },
+    {
+      balance: 1,
+      leverage: 1,
+      user_id: 1,
+      commission_per_lot: 1,
+      swap_charge: 1,
+      spread_enabled: 1,
+      bonus_balance: 1,
+      bonus_percent_override: 1,
+    },
+  ).lean();
+
+  const symbols = await Instrument.find(
+    { isTradeable: true },
+    {
+      code: 1,
+      segment: 1,
+      contractSize: 1,
+      maxLeverage: 1,
+      spread: 1,
+      tickSize: 1,
+      pricePrecision: 1,
+    },
+  ).lean();
 
 
 

@@ -46,6 +46,18 @@ const depositSchema = new mongoose.Schema(
       index: true
     },
 
+    bonus_percent: {
+      type: Number,
+      default: 0,
+      min: 0
+    },
+
+    bonus_amount: {
+      type: Number,
+      default: 0,
+      min: 0
+    },
+
     rejectionReason: {
       type: String,
       default: ''

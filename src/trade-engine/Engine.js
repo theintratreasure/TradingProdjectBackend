@@ -14,6 +14,8 @@ export class Engine {
   constructor() {
     this.accounts = new Map();
     this.symbols = new Map();
+    this.bonusEnabled = true;
+    this.bonusPercentDefault = 0;
 
     // In-process market status cache (ultra-fast, no Redis/DB on the order path).
     // Updated by `src/jobs/market.cron.js` and optionally after admin schedule updates.
@@ -23,6 +25,36 @@ export class Engine {
   /* =========================
      BOOTSTRAP
   ========================== */
+
+  setBonusSettings({ bonus_enabled, default_bonus_percent } = {}) {
+    if (bonus_enabled !== undefined) {
+      this.bonusEnabled = Boolean(bonus_enabled);
+    }
+
+    if (default_bonus_percent !== undefined) {
+      const v = Number(default_bonus_percent);
+      if (Number.isFinite(v) && v >= 0) {
+        this.bonusPercentDefault = Math.min(v, 200);
+      }
+    }
+
+    const effectiveDefault = this.bonusEnabled ? this.bonusPercentDefault : 0;
+
+    for (const acc of this.accounts.values()) {
+      const override =
+        typeof acc.bonus_percent_override === "number"
+          ? acc.bonus_percent_override
+          : null;
+
+      let effective =
+        this.bonusEnabled && override !== null ? override : effectiveDefault;
+
+      if (!Number.isFinite(effective) || effective < 0) effective = 0;
+
+      acc.bonus_percent = effective;
+      if (typeof acc.recalc === "function") acc.recalc();
+    }
+  }
 
   /**
    * loadAccount
@@ -39,6 +71,8 @@ export class Engine {
     commission_per_lot = 0,
     swap_charge = 0,
     spread_enabled = false,
+    bonus_balance = undefined,
+    bonus_percent_override = undefined,
     status = undefined,
     account_type = undefined,
   }) {
@@ -52,6 +86,26 @@ export class Engine {
     // and any websocket references (ws.engineAccount) become stale.
     const existing = this.accounts.get(id) || null;
 
+    const overrideForCalc =
+      bonus_percent_override !== undefined
+        ? typeof bonus_percent_override === "number"
+          ? bonus_percent_override
+          : null
+        : typeof existing?.bonus_percent_override === "number"
+          ? existing.bonus_percent_override
+          : null;
+
+    const defaultPercent = this.bonusEnabled ? this.bonusPercentDefault : 0;
+    let effectivePercent =
+      this.bonusEnabled && overrideForCalc !== null
+        ? overrideForCalc
+        : defaultPercent;
+
+    if (!Number.isFinite(effectivePercent) || effectivePercent < 0) {
+      effectivePercent = 0;
+    }
+    if (effectivePercent > 200) effectivePercent = 200;
+
     const acc = existing
       ? existing
       : new AccountState({
@@ -60,6 +114,14 @@ export class Engine {
           leverage,
           userId,
           lastIp,
+          bonus_balance: bonus_balance ?? 0,
+          bonus_percent: effectivePercent,
+          bonus_percent_override:
+            typeof bonus_percent_override === "number"
+              ? bonus_percent_override
+              : bonus_percent_override === null
+                ? null
+                : null,
         });
 
     // base fields (preserve runtime state like positions/pendingOrders)
@@ -75,6 +137,34 @@ export class Engine {
 
     // per-account spread ON/OFF
     acc.spread_enabled = Boolean(spread_enabled);
+
+    if (bonus_balance !== undefined) {
+      acc.bonus_balance = Number(bonus_balance) || 0;
+    }
+
+    if (bonus_percent_override !== undefined) {
+      acc.bonus_percent_override =
+        typeof bonus_percent_override === "number"
+          ? bonus_percent_override
+          : bonus_percent_override === null
+            ? null
+            : null;
+    }
+
+    const overrideEffective =
+      typeof acc.bonus_percent_override === "number"
+        ? acc.bonus_percent_override
+        : null;
+    let nextPercent =
+      this.bonusEnabled && overrideEffective !== null
+        ? overrideEffective
+        : this.bonusEnabled
+          ? this.bonusPercentDefault
+          : 0;
+
+    if (!Number.isFinite(nextPercent) || nextPercent < 0) nextPercent = 0;
+    if (nextPercent > 200) nextPercent = 200;
+    acc.bonus_percent = nextPercent;
 
     if (status !== undefined) acc.status = String(status);
     if (account_type !== undefined) acc.account_type = String(account_type);
@@ -98,6 +188,8 @@ export class Engine {
         commission_per_lot: acc.commission_per_lot,
         swap_charge: acc.swap_charge,
         spread_enabled: acc.spread_enabled,
+        bonus_balance: acc.bonus_balance,
+        bonus_percent: acc.bonus_percent,
         status: acc.status,
         account_type: acc.account_type,
       });
@@ -527,6 +619,21 @@ export class Engine {
         accountId: account.accountId,
         balance: Number(account.balance.toFixed(2)),
         equity: Number(account.equity.toFixed(2)),
+        bonusBalance: Number(
+          account.bonus_balance?.toFixed
+            ? account.bonus_balance.toFixed(2)
+            : account.bonus_balance || 0,
+        ),
+        bonusLive: Number(
+          account.bonus_live?.toFixed
+            ? account.bonus_live.toFixed(2)
+            : account.bonus_live || 0,
+        ),
+        bonusPercent: Number(
+          account.bonus_percent?.toFixed
+            ? account.bonus_percent.toFixed(2)
+            : account.bonus_percent || 0,
+        ),
         usedMargin: Number(account.usedMargin.toFixed(2)),
         freeMargin: Number(account.freeMargin.toFixed(2)),
       });
@@ -1066,6 +1173,21 @@ export class Engine {
           accountId: account.accountId,
           balance: Number(account.balance.toFixed(2)),
           equity: Number(account.equity.toFixed(2)),
+          bonusBalance: Number(
+            account.bonus_balance?.toFixed
+              ? account.bonus_balance.toFixed(2)
+              : account.bonus_balance || 0,
+          ),
+          bonusLive: Number(
+            account.bonus_live?.toFixed
+              ? account.bonus_live.toFixed(2)
+              : account.bonus_live || 0,
+          ),
+          bonusPercent: Number(
+            account.bonus_percent?.toFixed
+              ? account.bonus_percent.toFixed(2)
+              : account.bonus_percent || 0,
+          ),
           usedMargin: Number(account.usedMargin.toFixed(2)),
           freeMargin: Number(account.freeMargin.toFixed(2)),
         });
@@ -1105,6 +1227,21 @@ export class Engine {
     // credit realized pnl to balance
     account.balance = Number((account.balance + pos.floatingPnL).toFixed(8));
 
+    let bonusDeduct = 0;
+    if (pos.floatingPnL < 0) {
+      const percent = Number(account.bonus_percent) || 0;
+      const bonusBalance = Number(account.bonus_balance) || 0;
+      if (percent > 0 && bonusBalance > 0) {
+        const raw = Math.abs(pos.floatingPnL) * (percent / 100);
+        bonusDeduct = Math.min(bonusBalance, raw);
+        if (bonusDeduct > 0) {
+          account.bonus_balance = Number(
+            (bonusBalance - bonusDeduct).toFixed(8),
+          );
+        }
+      }
+    }
+
     // recalc after balance change
     this.recalcUsedMargin(account);
 
@@ -1117,6 +1254,9 @@ export class Engine {
       reason,
       commissionCharged: pos.commission || 0,
       swapPerDay: pos.swapPerDay || 0,
+      bonusDeduct,
+      bonusBalance: account.bonus_balance,
+      bonusPercent: Number(account.bonus_percent) || 0,
       closedAt: Date.now(),
     });
 
@@ -1139,6 +1279,21 @@ export class Engine {
         accountId: account.accountId,
         balance: Number(account.balance.toFixed(2)),
         equity: Number(account.equity.toFixed(2)),
+        bonusBalance: Number(
+          account.bonus_balance?.toFixed
+            ? account.bonus_balance.toFixed(2)
+            : account.bonus_balance || 0,
+        ),
+        bonusLive: Number(
+          account.bonus_live?.toFixed
+            ? account.bonus_live.toFixed(2)
+            : account.bonus_live || 0,
+        ),
+        bonusPercent: Number(
+          account.bonus_percent?.toFixed
+            ? account.bonus_percent.toFixed(2)
+            : account.bonus_percent || 0,
+        ),
         usedMargin: Number(account.usedMargin.toFixed(2)),
         freeMargin: Number(account.freeMargin.toFixed(2)),
       });

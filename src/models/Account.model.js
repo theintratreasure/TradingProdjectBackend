@@ -108,6 +108,26 @@ const AccountSchema = new mongoose.Schema(
       min: 0,
     },
 
+    // BONUS / CREDIT
+    bonus_balance: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    bonus_granted: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    // Per-account override percent (null = use global default)
+    bonus_percent_override: {
+      type: Number,
+      default: null,
+      min: 0,
+    },
+
     currency: {
       type: String,
       required: true,

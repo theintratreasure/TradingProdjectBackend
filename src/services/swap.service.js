@@ -195,7 +195,12 @@ export async function runSwapRollover({
                     // Keep DB equity aligned with balance for non-price operations.
                     // (Real-time equity is tracked inside trade-engine RAM.)
                     balance: { $subtract: ["$balance", swapToCharge] },
-                    equity: { $subtract: ["$balance", swapToCharge] },
+                    equity: {
+                      $add: [
+                        { $subtract: ["$balance", swapToCharge] },
+                        { $ifNull: ["$bonus_balance", 0] },
+                      ],
+                    },
                     swap_last_charged_ymd: ymd,
                     swap_last_charged_at: now,
                   },

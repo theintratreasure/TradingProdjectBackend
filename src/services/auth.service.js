@@ -96,9 +96,13 @@ export async function signupService({
 
     // 3️⃣ Referral
     let referredBy = null;
-    if (referral_code) {
+    const referralCode =
+      typeof referral_code === "string"
+        ? referral_code.trim().toUpperCase()
+        : null;
+    if (referralCode) {
       const parent = await Referral.findOne(
-        { referral_code },
+        { referral_code: referralCode },
         { user_id: 1 }
       );
       if (parent) referredBy = parent.user_id;

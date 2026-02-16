@@ -99,9 +99,9 @@ export function startEngineSyncBus() {
       }
 
       if (type === "ACCOUNT_BALANCE") {
-        EngineSync.updateBalance(payload?.accountId, payload?.balance).catch(
-          () => {},
-        );
+        EngineSync.updateBalance(payload?.accountId, payload?.balance, {
+          bonusBalance: payload?.bonusBalance,
+        }).catch(() => {});
         return;
       }
 
@@ -119,6 +119,15 @@ export function startEngineSyncBus() {
         const seg = payload?.segment;
         const status = payload?.status;
         if (seg && status) tradeEngine.setMarketStatus(seg, status);
+      }
+
+      if (type === "BONUS_SETTINGS") {
+        if (typeof tradeEngine.setBonusSettings === "function") {
+          tradeEngine.setBonusSettings({
+            bonus_enabled: payload?.bonus_enabled,
+            default_bonus_percent: payload?.default_bonus_percent,
+          });
+        }
       }
     } catch (err) {
       console.warn("[ENGINE_SYNC_BUS] handler error:", err?.message || err);
@@ -145,14 +154,25 @@ export function publishAccountSnapshot(accountDocOrSnapshot) {
     commission_per_lot: Number(accountDocOrSnapshot.commission_per_lot || 0),
     swap_charge: Number(accountDocOrSnapshot.swap_charge || 0),
     spread_enabled: accountDocOrSnapshot.spread_enabled === true,
+    bonus_balance: Number(accountDocOrSnapshot.bonus_balance || 0),
+    bonus_percent_override:
+      typeof accountDocOrSnapshot.bonus_percent_override === "number"
+        ? accountDocOrSnapshot.bonus_percent_override
+        : accountDocOrSnapshot.bonus_percent_override === null
+          ? null
+          : undefined,
     status: accountDocOrSnapshot.status,
     account_type: accountDocOrSnapshot.account_type,
   });
 }
 
-export function publishAccountBalance(accountId, balance) {
+export function publishAccountBalance(accountId, balance, bonusBalance) {
   if (!accountId) return;
-  publish("ACCOUNT_BALANCE", { accountId: String(accountId), balance });
+  publish("ACCOUNT_BALANCE", {
+    accountId: String(accountId),
+    balance,
+    bonusBalance,
+  });
 }
 
 export function publishSymbolUpsert(instrumentDoc) {
@@ -170,3 +190,23 @@ export function publishMarketStatus(segment, status) {
   publish("MARKET_STATUS", { segment: String(segment), status });
 }
 
+export function publishBonusSettings(settings) {
+  if (!settings) return;
+  try {
+    if (typeof tradeEngine.setBonusSettings === "function") {
+      tradeEngine.setBonusSettings({
+        bonus_enabled: settings.bonus_enabled,
+        default_bonus_percent: settings.default_bonus_percent,
+      });
+    }
+  } catch (err) {
+    console.warn(
+      "[ENGINE_SYNC_BUS] local bonus settings update failed:",
+      err?.message || err,
+    );
+  }
+  publish("BONUS_SETTINGS", {
+    bonus_enabled: settings.bonus_enabled,
+    default_bonus_percent: settings.default_bonus_percent,
+  });
+}

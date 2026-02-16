@@ -3,8 +3,43 @@ import Trade from "../models/Trade.model.js";
 import Transaction from "../models/Transaction.model.js";
 import PendingOrder from "../models/PendingOrder.model.js";
 import Brokerage from "../models/Brokerage.model.js";
+import BonusSetting from "../models/BonusSetting.model.js";
 import { engineEvents } from "./EngineEvents.js";
 import { publishAccountBalance } from "./EngineSyncBus.js";
+
+const BONUS_SETTINGS_KEY = "GLOBAL";
+const BONUS_CACHE_TTL_MS = 30 * 1000;
+const MAX_BONUS_PERCENT = 200;
+let cachedBonusSettings = null;
+let cachedBonusAt = 0;
+
+function normalizePercent(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return n > MAX_BONUS_PERCENT ? MAX_BONUS_PERCENT : n;
+}
+
+async function getBonusSettingsCached() {
+  const now = Date.now();
+  if (cachedBonusSettings && now - cachedBonusAt < BONUS_CACHE_TTL_MS) {
+    return cachedBonusSettings;
+  }
+
+  const settings = await BonusSetting.findOne({ key: BONUS_SETTINGS_KEY }).lean();
+  cachedBonusSettings = settings || { bonus_enabled: true, default_bonus_percent: 0 };
+  cachedBonusAt = now;
+  return cachedBonusSettings;
+}
+
+function resolveBonusPercent(account, settings) {
+  if (!settings?.bonus_enabled) return 0;
+  const override =
+    account && typeof account.bonus_percent_override === "number"
+      ? account.bonus_percent_override
+      : null;
+  if (override !== null) return normalizePercent(override);
+  return normalizePercent(settings?.default_bonus_percent || 0);
+}
 
 class LedgerQueue {
   constructor() {
@@ -137,6 +172,8 @@ class LedgerQueue {
     closePrice,
     realizedPnL,
     reason,
+    bonusDeduct,
+    bonusPercent,
   }) {
     const pnl = Number(realizedPnL);
 
@@ -172,13 +209,45 @@ class LedgerQueue {
 
     const newBalance = Number(account.balance) + pnl;
 
+    let bonusDeductValue = Number(bonusDeduct);
+    if (!Number.isFinite(bonusDeductValue) || bonusDeductValue < 0) {
+      bonusDeductValue = 0;
+    }
+
+    if (bonusDeductValue === 0 && pnl < 0) {
+      let effectivePercent = Number(bonusPercent);
+      if (!Number.isFinite(effectivePercent) || effectivePercent < 0) {
+        try {
+          const settings = await getBonusSettingsCached();
+          effectivePercent = resolveBonusPercent(account, settings);
+        } catch {
+          effectivePercent = 0;
+        }
+      }
+
+      if (effectivePercent > 0 && Number(account.bonus_balance || 0) > 0) {
+        const raw = Math.abs(pnl) * (effectivePercent / 100);
+        bonusDeductValue = Math.min(
+          Number(account.bonus_balance || 0),
+          Number(raw.toFixed(8)),
+        );
+      }
+    }
+
+    const currentBonus = Number(account.bonus_balance || 0);
+    const newBonusBalance =
+      bonusDeductValue > 0
+        ? Math.max(0, currentBonus - bonusDeductValue)
+        : currentBonus;
+    const newEquity = Number(newBalance) + Number(newBonusBalance);
+
     await Account.updateOne(
       { _id: accountId },
-      { $set: { balance: newBalance } }
+      { $set: { balance: newBalance, bonus_balance: newBonusBalance, equity: newEquity } }
     );
 
     // Fanout: keep other Node workers' RAM in sync with the DB balance update.
-    publishAccountBalance(String(accountId), newBalance);
+    publishAccountBalance(String(accountId), newBalance, newBonusBalance);
 
     const txn = await Transaction.create({
       user: userId || trade.userId,
@@ -186,6 +255,7 @@ class LedgerQueue {
       type: pnl >= 0 ? "TRADE_PROFIT" : "TRADE_LOSS",
       amount: Math.abs(pnl),
       balanceAfter: newBalance,
+      equityAfter: newEquity,
       referenceType: "TRADE",
       referenceId: trade._id,
       status: "SUCCESS",
@@ -206,6 +276,22 @@ class LedgerQueue {
       swap: typeof trade.swap === "number" ? trade.swap : 0,
       pnl,
     });
+
+    if (bonusDeductValue > 0) {
+      await Transaction.create({
+        user: userId || trade.userId,
+        account: accountId,
+        type: "BONUS_CREDIT_OUT",
+        amount: bonusDeductValue,
+        balanceAfter: newBalance,
+        equityAfter: newEquity,
+        referenceType: "TRADE",
+        referenceId: trade._id,
+        status: "SUCCESS",
+        remark: "Bonus reduced on trade loss",
+        createdAt: new Date(),
+      });
+    }
 
     console.log("[LEDGER][TRADE_CLOSE][OK]", {
       tradeId: trade._id.toString(),

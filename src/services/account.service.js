@@ -217,6 +217,9 @@ export async function getUserAccounts(userId) {
 
       balance: 1,
       equity: 1,
+      bonus_balance: 1,
+      bonus_granted: 1,
+      bonus_percent_override: 1,
       currency: 1,
       status: 1,
 
@@ -250,6 +253,9 @@ export async function getUserAccountDetail({ userId, accountId }) {
 
       balance: 1,
       equity: 1,
+      bonus_balance: 1,
+      bonus_granted: 1,
+      bonus_percent_override: 1,
       currency: 1,
 
       status: 1,
@@ -286,7 +292,7 @@ export async function resetDemoAccount({ userId, accountId }) {
   }
 
   account.balance = DEMO_DEFAULT_BALANCE;
-  account.equity = DEMO_DEFAULT_BALANCE;
+  account.equity = DEMO_DEFAULT_BALANCE + Number(account.bonus_balance || 0);
 
   await account.save();
 
@@ -370,7 +376,7 @@ export async function adminListUserAccounts({ userId, query = {} }) {
   const [items, total] = await Promise.all([
     Account.find(filter)
       .select(
-        "_id user_id account_plan_id account_number account_type plan_name leverage spread_enabled spread_pips commission_per_lot swap_enabled swap_charge balance hold_balance equity currency first_deposit status createdAt updatedAt"
+        "_id user_id account_plan_id account_number account_type plan_name leverage spread_enabled spread_pips commission_per_lot swap_enabled swap_charge balance hold_balance equity bonus_balance bonus_granted bonus_percent_override currency first_deposit status createdAt updatedAt"
       )
       .sort({ createdAt: -1 })
       .skip(skip)
@@ -459,6 +465,9 @@ export async function adminSearchAccounts({ query = {} }) {
               balance: 1,
               hold_balance: 1,
               equity: 1,
+              bonus_balance: 1,
+              bonus_granted: 1,
+              bonus_percent_override: 1,
               currency: 1,
               first_deposit: 1,
               status: 1,
@@ -522,6 +531,7 @@ export async function adminUpdateAccountService({ accountId, payload = {} }) {
     "commission_per_lot",
     "swap_enabled",
     "swap_charge",
+    "bonus_percent_override",
     "status",
   ];
 
@@ -562,6 +572,18 @@ export async function adminUpdateAccountService({ accountId, payload = {} }) {
   if (updates.swap_charge !== undefined) {
     if (typeof updates.swap_charge !== "number" || updates.swap_charge < 0) {
       throw new Error("Invalid swap_charge");
+    }
+  }
+
+  if (updates.bonus_percent_override !== undefined) {
+    if (updates.bonus_percent_override === null) {
+      updates.bonus_percent_override = null;
+    } else if (
+      typeof updates.bonus_percent_override !== "number" ||
+      updates.bonus_percent_override < 0 ||
+      updates.bonus_percent_override > 200
+    ) {
+      throw new Error("Invalid bonus_percent_override");
     }
   }
 

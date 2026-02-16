@@ -36,6 +36,13 @@ class EngineSync {
       commission_per_lot: Number(snapshot.commission_per_lot || 0),
       swap_charge: Number(snapshot.swap_charge || 0),
       spread_enabled: snapshot.spread_enabled === true,
+      bonus_balance: Number(snapshot.bonus_balance || 0),
+      bonus_percent_override:
+        typeof snapshot.bonus_percent_override === "number"
+          ? snapshot.bonus_percent_override
+          : snapshot.bonus_percent_override === null
+            ? null
+            : undefined,
 
       account_type: snapshot.account_type,
       status: snapshot.status,
@@ -65,7 +72,7 @@ class EngineSync {
      BALANCE UPDATE
   ============================ */
 
-  static async updateBalance(accountId, newBalance) {
+  static async updateBalance(accountId, newBalance, options = {}) {
     const id = String(accountId);
     let acc = tradeEngine.accounts.get(id);
 
@@ -75,13 +82,44 @@ class EngineSync {
       if (!acc) return;
     }
 
-    const b = Number(newBalance);
-    if (!Number.isFinite(b)) return;
+    const hasBalance = newBalance !== undefined && newBalance !== null;
+    const b = hasBalance ? Number(newBalance) : NaN;
+    if (hasBalance && Number.isFinite(b)) {
+      acc.balance = b;
+    }
 
-    acc.balance = b;
+    if (options && options.bonusBalance !== undefined) {
+      const bb = Number(options.bonusBalance);
+      if (Number.isFinite(bb)) {
+        acc.bonus_balance = bb;
+      }
+    }
+
+    if (options && options.bonusPercentOverride !== undefined) {
+      acc.bonus_percent_override =
+        typeof options.bonusPercentOverride === "number"
+          ? options.bonusPercentOverride
+          : options.bonusPercentOverride === null
+            ? null
+            : acc.bonus_percent_override;
+
+      const override =
+        typeof acc.bonus_percent_override === "number"
+          ? acc.bonus_percent_override
+          : null;
+      let effective =
+        tradeEngine.bonusEnabled && override !== null
+          ? override
+          : tradeEngine.bonusEnabled
+            ? tradeEngine.bonusPercentDefault
+            : 0;
+      if (!Number.isFinite(effective) || effective < 0) effective = 0;
+      acc.bonus_percent = effective;
+    }
+
     acc.recalc();
 
-    console.log("[ENGINE_SYNC] balance updated:", id, b);
+    console.log("[ENGINE_SYNC] balance updated:", id, hasBalance ? b : "no-op");
   }
 
   /* ===========================
@@ -202,6 +240,13 @@ class EngineSync {
         swap_charge: Number(acc.swap_charge || 0),
 
         spread_enabled: acc.spread_enabled === true,
+        bonus_balance: Number(acc.bonus_balance || 0),
+        bonus_percent_override:
+          typeof acc.bonus_percent_override === "number"
+            ? acc.bonus_percent_override
+            : acc.bonus_percent_override === null
+              ? null
+              : undefined,
 
         account_type: acc.account_type,
         status: acc.status,

@@ -627,6 +627,9 @@ export async function getSingleAccountService(accountId) {
       balance: 1,
       hold_balance: 1,
       equity: 1,
+      bonus_balance: 1,
+      bonus_granted: 1,
+      bonus_percent_override: 1,
       currency: 1,
 
       first_deposit: 1,
@@ -663,6 +666,12 @@ export async function getSingleAccountService(accountId) {
     balance: Number(account.balance.toFixed(2)),
     holdBalance: Number(account.hold_balance.toFixed(2)),
     equity: Number(account.equity.toFixed(2)),
+    bonusBalance: Number((account.bonus_balance || 0).toFixed(2)),
+    bonusGranted: Number((account.bonus_granted || 0).toFixed(2)),
+    bonusPercentOverride:
+      typeof account.bonus_percent_override === "number"
+        ? account.bonus_percent_override
+        : null,
 
     currency: account.currency,
 

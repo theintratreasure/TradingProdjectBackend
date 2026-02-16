@@ -25,6 +25,19 @@ const WithdrawalSchema = new mongoose.Schema(
       min: 1,
     },
 
+    // BONUS SNAPSHOT
+    bonus_percent: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    bonus_deducted: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
     // METHOD
     method: {
       type: String,

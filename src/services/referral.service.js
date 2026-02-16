@@ -285,10 +285,12 @@ export async function adminApproveReferralRewardService({ adminId, rewardId }) {
       }
 
       const newBalance = Number(account.balance) + amount;
+      const newEquity =
+        Number(newBalance) + Number(account.bonus_balance || 0);
 
       await Account.updateOne(
         { _id: account._id },
-        { $set: { balance: newBalance, equity: newBalance } },
+        { $set: { balance: newBalance, equity: newEquity } },
         { session },
       );
 
@@ -300,6 +302,7 @@ export async function adminApproveReferralRewardService({ adminId, rewardId }) {
             type: "REFERRAL",
             amount,
             balanceAfter: newBalance,
+            equityAfter: newEquity,
             status: "SUCCESS",
             referenceType: "SYSTEM",
             referenceId: reward._id,

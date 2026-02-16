@@ -26,6 +26,14 @@ export async function bootstrapEngine({ accounts, symbols }) {
 
       // spread control (account-level ON / OFF)
       spread_enabled: Boolean(acc.spread_enabled),
+
+      bonus_balance: Number(acc.bonus_balance || 0),
+      bonus_percent_override:
+        typeof acc.bonus_percent_override === "number"
+          ? acc.bonus_percent_override
+          : acc.bonus_percent_override === null
+            ? null
+            : undefined,
     });
   }
 

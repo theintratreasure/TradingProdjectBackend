@@ -244,16 +244,26 @@ export async function createInternalTransferService({
 
     await Account.updateOne(
       { _id: fromAcc._id },
-      // Keep DB equity in sync with balance for non-trade operations.
+      // Keep DB equity in sync with balance + bonus for non-trade operations.
       // (Floating PnL is tracked in the trade-engine RAM, not persisted here.)
-      { $set: { balance: fromNew, equity: fromNew } },
-      { session }
+      {
+        $set: {
+          balance: fromNew,
+          equity: Number(fromNew) + Number(fromAcc.bonus_balance || 0),
+        },
+      },
+      { session },
     );
 
     await Account.updateOne(
       { _id: toAcc._id },
-      { $set: { balance: toNew, equity: toNew } },
-      { session }
+      {
+        $set: {
+          balance: toNew,
+          equity: Number(toNew) + Number(toAcc.bonus_balance || 0),
+        },
+      },
+      { session },
     );
 
     /* ================= TRANSACTION HISTORY ================= */
@@ -458,15 +468,25 @@ export async function adminCreateInternalTransferService({
 
     await Account.updateOne(
       { _id: fromAcc._id },
-      // Keep DB equity in sync with balance for non-trade operations.
+      // Keep DB equity in sync with balance + bonus for non-trade operations.
       // (Floating PnL is tracked in the trade-engine RAM, not persisted here.)
-      { $set: { balance: fromNew, equity: fromNew } },
+      {
+        $set: {
+          balance: fromNew,
+          equity: Number(fromNew) + Number(fromAcc.bonus_balance || 0),
+        },
+      },
       { session },
     );
 
     await Account.updateOne(
       { _id: toAcc._id },
-      { $set: { balance: toNew, equity: toNew } },
+      {
+        $set: {
+          balance: toNew,
+          equity: Number(toNew) + Number(toAcc.bonus_balance || 0),
+        },
+      },
       { session },
     );
 

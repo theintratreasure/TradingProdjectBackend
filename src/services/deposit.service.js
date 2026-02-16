@@ -10,6 +10,7 @@ import redis from "../config/redis.js";
 import EngineSync from "../trade-engine/EngineSync.js";
 import { publishAccountBalance } from "../trade-engine/EngineSyncBus.js";
 import { createReferralRewardEligibility } from "./referral.service.js";
+import { getEffectiveBonusPercentForAccount } from "./bonus.service.js";
 
 export async function createDepositService({
   userId,
@@ -134,6 +135,8 @@ export async function getUserDepositsService({
       amount: 1,
       method: 1,
       status: 1,
+      bonus_percent: 1,
+      bonus_amount: 1,
       proof: 1,
       rejectionReason: 1,
       createdAt: 1,
@@ -172,6 +175,8 @@ export async function getDepositStatusService(userId, depositId) {
       amount: 1,
       method: 1,
       status: 1,
+      bonus_percent: 1,
+      bonus_amount: 1,
       rejectionReason: 1,
       "proof.image_url": 1, // ✅ ONLY IMAGE URL (SAFE)
       createdAt: 1,
@@ -395,6 +400,8 @@ export async function adminSearchDepositsService(query = {}) {
               amount: 1,
               method: 1,
               status: 1,
+              bonus_percent: 1,
+              bonus_amount: 1,
               rejectionReason: 1,
               proof: 1,
               actionBy: 1,
@@ -432,6 +439,7 @@ export async function approveDepositService(depositId, adminId) {
   const session = await mongoose.startSession();
   let engineAccountId = null;
   let engineNewBalance = null;
+  let engineBonusBalance = null;
 
   try {
     await session.withTransaction(async () => {
@@ -468,6 +476,16 @@ export async function approveDepositService(depositId, adminId) {
          4. CALCULATE BALANCE
       ========================== */
       const newBalance = account.balance + deposit.amount;
+      const bonusPercent = await getEffectiveBonusPercentForAccount(account);
+      const bonusAmount =
+        account.account_type === "live" && bonusPercent > 0
+          ? Number(((deposit.amount * bonusPercent) / 100).toFixed(8))
+          : 0;
+      const newBonusBalance =
+        Number(account.bonus_balance || 0) + bonusAmount;
+      const newBonusGranted =
+        Number(account.bonus_granted || 0) + bonusAmount;
+      const newEquity = Number(newBalance) + Number(newBonusBalance);
 
       /* =========================
          5. UPDATE DEPOSIT
@@ -476,6 +494,8 @@ export async function approveDepositService(depositId, adminId) {
       deposit.actionBy = adminId;
       deposit.actionAt = new Date();
       deposit.rejectionReason = "";
+      deposit.bonus_percent = Number(bonusPercent || 0);
+      deposit.bonus_amount = Number(bonusAmount || 0);
 
       await deposit.save({ session });
 
@@ -488,6 +508,9 @@ export async function approveDepositService(depositId, adminId) {
           $set: {
             balance: newBalance,
             first_deposit: true,
+            bonus_balance: newBonusBalance,
+            bonus_granted: newBonusGranted,
+            equity: newEquity,
           },
         },
         { session },
@@ -515,6 +538,7 @@ export async function approveDepositService(depositId, adminId) {
             type: "DEPOSIT",
             amount: deposit.amount,
             balanceAfter: newBalance,
+            equityAfter: newEquity,
             status: "SUCCESS",
             referenceType: "DEPOSIT",
             referenceId: deposit._id,
@@ -525,8 +549,30 @@ export async function approveDepositService(depositId, adminId) {
         { session },
       );
 
+      if (bonusAmount > 0) {
+        await Transaction.create(
+          [
+            {
+              user: deposit.user,
+              account: deposit.account,
+              type: "BONUS_CREDIT_IN",
+              amount: bonusAmount,
+              balanceAfter: newBalance,
+              equityAfter: newEquity,
+              status: "SUCCESS",
+              referenceType: "DEPOSIT",
+              referenceId: deposit._id,
+              createdBy: adminId,
+              remark: "Deposit bonus credited",
+            },
+          ],
+          { session },
+        );
+      }
+
       engineAccountId = String(account._id);
       engineNewBalance = Number(newBalance);
+      engineBonusBalance = Number(newBonusBalance);
     });
 
     /* =========================
@@ -534,8 +580,14 @@ export async function approveDepositService(depositId, adminId) {
     ========================== */
     try {
       if (engineAccountId && Number.isFinite(engineNewBalance)) {
-        publishAccountBalance(engineAccountId, engineNewBalance);
-        await EngineSync.updateBalance(engineAccountId, engineNewBalance);
+        publishAccountBalance(
+          engineAccountId,
+          engineNewBalance,
+          engineBonusBalance,
+        );
+        await EngineSync.updateBalance(engineAccountId, engineNewBalance, {
+          bonusBalance: engineBonusBalance,
+        });
       }
     } catch (e) {
       console.error(
@@ -645,6 +697,7 @@ export async function adminCreateDepositService({
   const session = await mongoose.startSession();
   let createdDeposit = null;
   let engineNewBalance = null;
+  let engineBonusBalance = null;
 
   try {
     await session.withTransaction(async () => {
@@ -660,6 +713,17 @@ export async function adminCreateDepositService({
 
       const newBalance = account.balance + amount;
       engineNewBalance = Number(newBalance);
+      const bonusPercent = await getEffectiveBonusPercentForAccount(account);
+      const bonusAmount =
+        account.account_type === "live" && bonusPercent > 0
+          ? Number(((amount * bonusPercent) / 100).toFixed(8))
+          : 0;
+      const newBonusBalance =
+        Number(account.bonus_balance || 0) + bonusAmount;
+      const newBonusGranted =
+        Number(account.bonus_granted || 0) + bonusAmount;
+      const newEquity = Number(newBalance) + Number(newBonusBalance);
+      engineBonusBalance = Number(newBonusBalance);
 
       createdDeposit = await Deposit.create(
         [
@@ -669,6 +733,8 @@ export async function adminCreateDepositService({
             amount,
             method,
             proof: safeProof,
+            bonus_percent: Number(bonusPercent || 0),
+            bonus_amount: Number(bonusAmount || 0),
             status: "APPROVED",
             actionBy: adminId,
             actionAt: new Date(),
@@ -684,6 +750,9 @@ export async function adminCreateDepositService({
           $set: {
             balance: newBalance,
             first_deposit: true,
+            bonus_balance: newBonusBalance,
+            bonus_granted: newBonusGranted,
+            equity: newEquity,
           },
         },
         { session },
@@ -708,6 +777,7 @@ export async function adminCreateDepositService({
             type: "DEPOSIT",
             amount,
             balanceAfter: newBalance,
+            equityAfter: newEquity,
             status: "SUCCESS",
             referenceType: "DEPOSIT",
             referenceId: createdDeposit[0]._id,
@@ -717,13 +787,36 @@ export async function adminCreateDepositService({
         ],
         { session },
       );
+
+      if (bonusAmount > 0) {
+        await Transaction.create(
+          [
+            {
+              user: account.user_id,
+              account: account._id,
+              type: "BONUS_CREDIT_IN",
+              amount: bonusAmount,
+              balanceAfter: newBalance,
+              equityAfter: newEquity,
+              status: "SUCCESS",
+              referenceType: "DEPOSIT",
+              referenceId: createdDeposit[0]._id,
+              createdBy: adminId,
+              remark: "Deposit bonus credited",
+            },
+          ],
+          { session },
+        );
+      }
     });
 
     // Sync engine after DB commit
     try {
       if (accountId && Number.isFinite(engineNewBalance)) {
-        publishAccountBalance(accountId, engineNewBalance);
-        await EngineSync.updateBalance(String(accountId), engineNewBalance);
+        publishAccountBalance(accountId, engineNewBalance, engineBonusBalance);
+        await EngineSync.updateBalance(String(accountId), engineNewBalance, {
+          bonusBalance: engineBonusBalance,
+        });
       }
     } catch (e) {
       console.error(

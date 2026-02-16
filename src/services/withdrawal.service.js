@@ -6,6 +6,7 @@ import User from "../models/User.model.js";
 import Trade from "../models/Trade.model.js";
 import EngineSync from "../trade-engine/EngineSync.js";
 import { publishAccountBalance } from "../trade-engine/EngineSyncBus.js";
+import { getEffectiveBonusPercentForAccount } from "./bonus.service.js";
 
 /* -------------------- HELPERS -------------------- */
 
@@ -104,6 +105,24 @@ const validatePayout = ({ method, payout }) => {
   return { ok: true, message: "OK" };
 };
 
+const computeBonusDeduction = ({
+  amount,
+  bonusBalance,
+  bonusPercent,
+}) => {
+  const amt = Number(amount);
+  const bal = Number(bonusBalance);
+  const pct = Number(bonusPercent);
+
+  if (!Number.isFinite(amt) || amt <= 0) return 0;
+  if (!Number.isFinite(bal) || bal <= 0) return 0;
+  if (!Number.isFinite(pct) || pct <= 0) return 0;
+
+  const raw = (amt * pct) / 100;
+  const safeRaw = Number(raw.toFixed(8));
+  return Math.max(0, Math.min(bal, safeRaw));
+};
+
 /* -------------------- ADMIN: CREATE WITHDRAWAL (INSTANT) -------------------- */
 /**
  * ADMIN: CREATE WITHDRAWAL
@@ -140,6 +159,7 @@ export const adminCreateWithdrawal = async ({
 
     let createdWithdrawal = null;
     let newBalanceAfter = null;
+    let newBonusBalanceAfter = null;
 
     await session.withTransaction(async () => {
       /* =========================
@@ -177,12 +197,22 @@ export const adminCreateWithdrawal = async ({
         throw new Error("Insufficient balance");
       }
 
+      const bonusPercent = await getEffectiveBonusPercentForAccount(account);
+      const bonusDeduct = computeBonusDeduction({
+        amount,
+        bonusBalance: account.bonus_balance,
+        bonusPercent,
+      });
+
       /* =========================
          DEDUCT BALANCE (NO HOLD)
       ========================== */
       account.balance = account.balance - amount;
-      account.equity = account.balance;
+      account.bonus_balance = Number(account.bonus_balance || 0) - bonusDeduct;
+      if (account.bonus_balance < 0) account.bonus_balance = 0;
+      account.equity = Number(account.balance) + Number(account.bonus_balance);
       newBalanceAfter = account.balance;
+      newBonusBalanceAfter = account.bonus_balance;
 
       await account.save({ session });
 
@@ -209,6 +239,8 @@ export const adminCreateWithdrawal = async ({
             actionBy: adminId,
             actionAt: new Date(),
             ipAddress: ipAddress || "",
+            bonus_percent: Number(bonusPercent || 0),
+            bonus_deducted: Number(bonusDeduct || 0),
           },
         ],
         { session },
@@ -227,6 +259,7 @@ export const adminCreateWithdrawal = async ({
             type: "WITHDRAWAL",
             amount,
             balanceAfter: account.balance,
+            equityAfter: account.equity,
             status: "SUCCESS",
             referenceType: "WITHDRAWAL",
             referenceId: createdWithdrawal._id,
@@ -236,15 +269,43 @@ export const adminCreateWithdrawal = async ({
         ],
         { session },
       );
+
+      if (bonusDeduct > 0) {
+        await Transaction.create(
+          [
+            {
+              user: account.user_id,
+              account: account._id,
+              type: "BONUS_CREDIT_OUT",
+              amount: bonusDeduct,
+              balanceAfter: account.balance,
+              equityAfter: account.equity,
+              status: "SUCCESS",
+              referenceType: "WITHDRAWAL",
+              referenceId: createdWithdrawal._id,
+              createdBy: adminId,
+              remark: "Bonus deducted on withdrawal",
+            },
+          ],
+          { session },
+        );
+      }
     });
 
     // Sync engine: update balance (best-effort)
     try {
       if (newBalanceAfter !== null) {
-        publishAccountBalance(String(payload.accountId), Number(newBalanceAfter));
+        publishAccountBalance(
+          String(payload.accountId),
+          Number(newBalanceAfter),
+          Number(newBonusBalanceAfter || 0),
+        );
         await EngineSync.updateBalance(
           String(payload.accountId),
           Number(newBalanceAfter),
+          {
+            bonusBalance: Number(newBonusBalanceAfter || 0),
+          },
         );
       }
     } catch (e) {
@@ -283,6 +344,7 @@ export const createWithdrawal = async ({ userId, ipAddress, payload }) => {
   const session = await mongoose.startSession();
   let engineAccountId = null;
   let engineNewBalance = null;
+  let engineBonusBalance = null;
 
   try {
     const { accountId, amount, method, payout } = payload;
@@ -383,23 +445,33 @@ export const createWithdrawal = async ({ userId, ipAddress, payload }) => {
         throw new Error("Insufficient balance");
       }
 
+      const bonusPercent = await getEffectiveBonusPercentForAccount(account);
+      const bonusDeduct = computeBonusDeduction({
+        amount,
+        bonusBalance: account.bonus_balance,
+        bonusPercent,
+      });
+
       /* =========================
          LOCK FUNDS
       ========================== */
       account.balance = account.balance - amount;
       account.hold_balance = holdBalance + amount;
+      account.bonus_balance = Number(account.bonus_balance || 0) - bonusDeduct;
+      if (account.bonus_balance < 0) account.bonus_balance = 0;
 
       if (account.balance < 0) {
         throw new Error("Insufficient balance");
       }
 
-      // equity = balance
-      account.equity = account.balance;
+      // equity = balance + bonus
+      account.equity = Number(account.balance) + Number(account.bonus_balance);
 
       await account.save({ session });
 
       engineAccountId = String(account._id);
       engineNewBalance = Number(account.balance);
+      engineBonusBalance = Number(account.bonus_balance);
 
       /* =========================
          CREATE WITHDRAWAL
@@ -422,6 +494,8 @@ export const createWithdrawal = async ({ userId, ipAddress, payload }) => {
             },
             status: "PENDING",
             ipAddress: ipAddress || "",
+            bonus_percent: Number(bonusPercent || 0),
+            bonus_deducted: Number(bonusDeduct || 0),
           },
         ],
         { session },
@@ -440,6 +514,7 @@ export const createWithdrawal = async ({ userId, ipAddress, payload }) => {
             type: "WITHDRAWAL",
             amount,
             balanceAfter: account.balance,
+            equityAfter: account.equity,
             status: "PENDING",
             referenceType: "WITHDRAWAL",
             referenceId: createdWithdrawal._id,
@@ -450,13 +525,40 @@ export const createWithdrawal = async ({ userId, ipAddress, payload }) => {
         ],
         { session },
       );
+
+      if (bonusDeduct > 0) {
+        await Transaction.create(
+          [
+            {
+              user: userId,
+              account: account._id,
+              type: "BONUS_CREDIT_OUT",
+              amount: bonusDeduct,
+              balanceAfter: account.balance,
+              equityAfter: account.equity,
+              status: "PENDING",
+              referenceType: "WITHDRAWAL",
+              referenceId: createdWithdrawal._id,
+              createdBy: userId,
+              remark: "Bonus deducted on withdrawal request",
+            },
+          ],
+          { session },
+        );
+      }
     });
 
     // Sync engine after DB commit
     try {
       if (engineAccountId && Number.isFinite(engineNewBalance)) {
-        publishAccountBalance(engineAccountId, engineNewBalance);
-        await EngineSync.updateBalance(engineAccountId, engineNewBalance);
+        publishAccountBalance(
+          engineAccountId,
+          engineNewBalance,
+          engineBonusBalance,
+        );
+        await EngineSync.updateBalance(engineAccountId, engineNewBalance, {
+          bonusBalance: engineBonusBalance,
+        });
       }
     } catch (e) {
       console.error(
@@ -733,6 +835,8 @@ export const adminSearchWithdrawals = async ({ query }) => {
                   status: "$account.status",
                 },
                 amount: 1,
+                bonus_percent: 1,
+                bonus_deducted: 1,
                 method: 1,
                 payout: 1,
                 status: 1,
@@ -831,7 +935,7 @@ export const adminApproveWithdrawal = async ({ adminId, withdrawalId }) => {
         account.hold_balance = 0;
       }
 
-      account.equity = account.balance;
+      account.equity = Number(account.balance) + Number(account.bonus_balance || 0);
 
       await account.save({ session });
 
@@ -854,6 +958,25 @@ export const adminApproveWithdrawal = async ({ adminId, withdrawalId }) => {
             status: "SUCCESS",
             balanceAfter: account.balance,
             remark: "Withdrawal approved and completed",
+          },
+        },
+        { session },
+      );
+
+      await Transaction.findOneAndUpdate(
+        {
+          referenceType: "WITHDRAWAL",
+          referenceId: withdrawal._id,
+          user: withdrawal.user,
+          account: withdrawal.account,
+          type: "BONUS_CREDIT_OUT",
+        },
+        {
+          $set: {
+            status: "SUCCESS",
+            balanceAfter: account.balance,
+            equityAfter: account.equity,
+            remark: "Bonus deducted on withdrawal approval",
           },
         },
         { session },
@@ -891,6 +1014,7 @@ export const adminRejectWithdrawal = async ({
   const session = await mongoose.startSession();
   let engineAccountId = null;
   let engineNewBalance = null;
+  let engineBonusBalance = null;
 
   try {
     if (!mongoose.isValidObjectId(withdrawalId)) {
@@ -940,16 +1064,26 @@ export const adminRejectWithdrawal = async ({
       account.balance = account.balance + withdrawal.amount;
       account.hold_balance = holdBalance - withdrawal.amount;
 
+      const bonusRefund = Number(withdrawal.bonus_deducted || 0);
+      if (bonusRefund > 0) {
+        const rawBonus =
+          Number(account.bonus_balance || 0) + Number(bonusRefund || 0);
+        const granted = Number(account.bonus_granted || 0);
+        account.bonus_balance =
+          granted > 0 ? Math.min(rawBonus, granted) : rawBonus;
+      }
+
       if (account.hold_balance < 0) {
         account.hold_balance = 0;
       }
 
-      account.equity = account.balance;
+      account.equity = Number(account.balance) + Number(account.bonus_balance || 0);
 
       await account.save({ session });
 
       engineAccountId = String(account._id);
       engineNewBalance = Number(account.balance);
+      engineBonusBalance = Number(account.bonus_balance || 0);
 
       withdrawal.status = "REJECTED";
       withdrawal.rejectionReason = reason;
@@ -974,13 +1108,59 @@ export const adminRejectWithdrawal = async ({
         },
         { session },
       );
+
+      await Transaction.findOneAndUpdate(
+        {
+          referenceType: "WITHDRAWAL",
+          referenceId: withdrawal._id,
+          user: withdrawal.user,
+          account: withdrawal.account,
+          type: "BONUS_CREDIT_OUT",
+        },
+        {
+          $set: {
+            status: "FAILED",
+            balanceAfter: account.balance,
+            equityAfter: account.equity,
+            remark: `Bonus refund on withdrawal rejection`,
+          },
+        },
+        { session },
+      );
+
+      if (bonusRefund > 0) {
+        await Transaction.create(
+          [
+            {
+              user: withdrawal.user,
+              account: withdrawal.account,
+              type: "BONUS_CREDIT_IN",
+              amount: bonusRefund,
+              balanceAfter: account.balance,
+              equityAfter: account.equity,
+              status: "SUCCESS",
+              referenceType: "WITHDRAWAL",
+              referenceId: withdrawal._id,
+              createdBy: adminId,
+              remark: "Bonus refunded on withdrawal rejection",
+            },
+          ],
+          { session },
+        );
+      }
     });
 
     // Sync engine after DB commit
     try {
       if (engineAccountId && Number.isFinite(engineNewBalance)) {
-        publishAccountBalance(engineAccountId, engineNewBalance);
-        await EngineSync.updateBalance(engineAccountId, engineNewBalance);
+        publishAccountBalance(
+          engineAccountId,
+          engineNewBalance,
+          engineBonusBalance,
+        );
+        await EngineSync.updateBalance(engineAccountId, engineNewBalance, {
+          bonusBalance: engineBonusBalance,
+        });
       }
     } catch (e) {
       console.error(
