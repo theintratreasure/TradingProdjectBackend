@@ -13,6 +13,20 @@ import { getUserPortfolioSummaryService } from "../services/tradePortfolio.servi
    COMMON: ACCOUNT OWNERSHIP
 ========================= */
 async function verifyAccountOwnership(userId, accountId) {
+  const acc = tradeEngine?.accounts?.get(String(accountId)) || null;
+  if (acc) {
+    if (String(acc.userId) !== String(userId)) {
+      throw new Error("Account does not belong to user");
+    }
+    if (acc.isBlocked === true) {
+      throw new Error("Account is blocked");
+    }
+    if (typeof acc.status === "string" && acc.status !== "active") {
+      throw new Error("Account is inactive");
+    }
+    return;
+  }
+
   const exists = await Account.exists({
     _id: accountId,
     user_id: userId,
