@@ -21,8 +21,7 @@ export async function createAccountController(req, res) {
     const {
       account_plan_id,
       account_type,
-      leverage,
-      currency
+      opening_balance
     } = req.body;
 
     if (!account_plan_id || !account_type ) {
@@ -36,6 +35,7 @@ export async function createAccountController(req, res) {
       userId: req.user._id,
       account_plan_id,
       account_type,
+      opening_balance
     });
 
     return res.status(201).json({

@@ -17,11 +17,30 @@ const DEMO_DEFAULT_BALANCE = 10000;
 /* =====================================================
    CREATE ACCOUNT
 ===================================================== */
-export async function createAccount({ userId, account_plan_id, account_type }) {
+export async function createAccount({
+  userId,
+  account_plan_id,
+  account_type,
+  opening_balance,
+}) {
   if (!userId) throw new Error("User not authenticated");
 
   if (!["demo", "live"].includes(account_type)) {
     throw new Error("Invalid account type");
+  }
+
+  const openingBalanceProvided =
+    opening_balance !== undefined && opening_balance !== null;
+  const openingBalance = Number(opening_balance);
+
+  if (openingBalanceProvided) {
+    if (account_type !== "demo") {
+      throw new Error("opening_balance is allowed only for demo accounts");
+    }
+
+    if (!Number.isFinite(openingBalance) || openingBalance <= 0) {
+      throw new Error("Invalid opening_balance");
+    }
   }
 
   /* ================= PLAN ================= */
@@ -33,13 +52,20 @@ export async function createAccount({ userId, account_plan_id, account_type }) {
 
   if (!plan) throw new Error("Invalid plan");
 
+  // Keep live/demo plans isolated:
+  // - demo plan (is_demo_allowed=true) can create only demo accounts
+  // - non-demo plan can create only live accounts
+  if (account_type === "live" && plan.is_demo_allowed === true) {
+    throw new Error("Live account not allowed on demo plan");
+  }
+
+  if (account_type === "demo" && plan.is_demo_allowed !== true) {
+    throw new Error("Demo account not allowed on this plan");
+  }
+
   /* ================= DEMO ================= */
 
   if (account_type === "demo") {
-    if (plan.is_demo_allowed === false) {
-      throw new Error("Demo not allowed");
-    }
-
     const demoCount = await Account.countDocuments({
       user_id: userId,
       account_type: "demo",
@@ -72,7 +98,12 @@ export async function createAccount({ userId, account_plan_id, account_type }) {
 
   if (leverage <= 0) throw new Error("Invalid leverage");
 
-  const balance = account_type === "demo" ? DEMO_DEFAULT_BALANCE : 0;
+  const balance =
+    account_type === "demo"
+      ? openingBalanceProvided
+        ? openingBalance
+        : DEMO_DEFAULT_BALANCE
+      : 0;
 
   const accountNumber = generateAccountNumber();
 
