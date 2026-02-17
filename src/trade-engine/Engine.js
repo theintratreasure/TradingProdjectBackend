@@ -1225,7 +1225,7 @@ export class Engine {
       await RiskManager.checkWarning(account);
 
       if (RiskManager.shouldStopOut(account)) {
-        this.forceCloseWorst(account);
+        this.forceCloseAll(account);
       }
     }
   }
@@ -1339,6 +1339,17 @@ export class Engine {
     const sym = this.symbols.get(worst.symbol);
 
     this.closePositionInternal(account, worst, "STOP_OUT", sym);
+  }
+
+  forceCloseAll(account) {
+    const allPositions = Array.from(account.positions.values());
+    if (allPositions.length === 0) return;
+
+    for (const pos of allPositions) {
+      const sym = this.symbols.get(pos.symbol);
+      if (!sym) continue;
+      this.closePositionInternal(account, pos, "STOP_OUT", sym);
+    }
   }
 
   squareOffPosition({ accountId, positionId, reason = "MANUAL" }) {

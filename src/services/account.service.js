@@ -94,7 +94,7 @@ export async function createAccount({
   const leverage =
     typeof plan.max_leverage === "number" && plan.max_leverage > 0
       ? plan.max_leverage
-      : 1;
+      : 2000;
 
   if (leverage <= 0) throw new Error("Invalid leverage");
 

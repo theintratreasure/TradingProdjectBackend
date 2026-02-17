@@ -31,6 +31,7 @@ const REDIS_CHANNEL = "engine:events";
 // Debug flags
 const DBG_VERBOSE = String(process.env.ALLTICK_DEBUG || "0") === "1" || String(process.env.ALLTICK_DEBUG || "0") === "true";
 const LOG_THROTTLE_MS = Number(process.env.ALLTICK_DEBUG_THROTTLE_MS || 1500);
+const INSTANCE_ID = `${process.pid}-${uuidv4()}`;
 
 // ========================
 // Redis pub/sub
@@ -446,6 +447,115 @@ export function removeClient(id) {
   DBG("Disconnected client", id);
 }
 
+function forwardEventToLocalClients(eventType, payload) {
+  if (!eventType || !payload) return false;
+
+  if (eventType === "LIVE_ACCOUNT") {
+    const s = accountIdMap.get(String(payload.accountId));
+    if (!s || s.size === 0) return true;
+    const msgStr = JSON.stringify({ type: "live_account", data: payload });
+    let sent = 0;
+    for (const clientId of s) {
+      const ws = wsClients.get(clientId);
+      if (!ws || ws.readyState !== WebSocket.OPEN) continue;
+      if (!ws.routes || !ws.routes.has("account")) continue;
+      try {
+        ws.send(msgStr);
+        sent++;
+      } catch (err) {
+        ERROR("[WS SEND ERROR] live_account ->", err && err.message ? err.message : err);
+      }
+    }
+    DBG(`forwarded live_account to ${sent}/${s.size} clients for account ${payload.accountId}`);
+    return true;
+  }
+
+  if (eventType === "LIVE_POSITION") {
+    const s = accountIdMap.get(String(payload.accountId));
+    if (!s || s.size === 0) return true;
+    const msgStr = JSON.stringify({ type: "live_position", data: payload });
+    let sent = 0;
+    for (const clientId of s) {
+      const ws = wsClients.get(clientId);
+      if (!ws || ws.readyState !== WebSocket.OPEN) continue;
+      if (!ws.routes || !ws.routes.has("account")) continue;
+      try {
+        ws.send(msgStr);
+        sent++;
+      } catch (err) {
+        ERROR("[WS SEND ERROR] live_position ->", err && err.message ? err.message : err);
+      }
+    }
+    DBG(`forwarded live_position to ${sent}/${s.size} clients for account ${payload.accountId}`);
+    return true;
+  }
+
+  if (eventType === "LIVE_POSITION_CLOSED") {
+    const s = accountIdMap.get(String(payload.accountId));
+    if (!s || s.size === 0) return true;
+    const msgStr = JSON.stringify({ type: "live_position_closed", data: payload });
+    let sent = 0;
+    for (const clientId of s) {
+      const ws = wsClients.get(clientId);
+      if (!ws || ws.readyState !== WebSocket.OPEN) continue;
+      if (!ws.routes || !ws.routes.has("account")) continue;
+      try {
+        ws.send(msgStr);
+        sent++;
+      } catch (err) {
+        ERROR("[WS SEND ERROR] live_position_closed ->", err && err.message ? err.message : err);
+      }
+    }
+    DBG(`forwarded live_position_closed to ${sent}/${s.size} clients for account ${payload.accountId}`);
+    return true;
+  }
+
+  if (
+    [
+      "LIVE_PENDING",
+      "LIVE_PENDING_EXECUTE",
+      "LIVE_PENDING_CANCEL",
+      "LIVE_PENDING_EXECUTE_FAILED",
+      "LIVE_PENDING_MODIFY",
+    ].includes(eventType)
+  ) {
+    const accountId = String(payload.accountId);
+    const clients = accountIdMap.get(accountId);
+    if (!clients || clients.size === 0) {
+      DBG("no subscribers for pending event account", accountId);
+      return true;
+    }
+
+    const typeMap = {
+      LIVE_PENDING: "live_pending",
+      LIVE_PENDING_EXECUTE: "live_pending_execute",
+      LIVE_PENDING_CANCEL: "live_pending_cancel",
+      LIVE_PENDING_EXECUTE_FAILED: "live_pending_execute_failed",
+      LIVE_PENDING_MODIFY: "live_pending_modify",
+    };
+
+    const type = typeMap[eventType] || "live_pending";
+
+    const msgStr = JSON.stringify({ type, data: payload });
+    let sent = 0;
+    for (const clientId of clients) {
+      const ws = wsClients.get(clientId);
+      if (!ws || ws.readyState !== WebSocket.OPEN) continue;
+      if (!ws.routes || !ws.routes.has("account")) continue;
+      try {
+        ws.send(msgStr);
+        sent++;
+      } catch (err) {
+        ERROR("[WS SEND ERROR]", type, "->", err && err.message ? err.message : err);
+      }
+    }
+    DBG(`forwarded ${type} to ${sent}/${clients.size} clients for account ${accountId}`);
+    return true;
+  }
+
+  return false;
+}
+
 // ========================
 // BROADCAST ORDERBOOK (market route only)
 // - Applies per-account+per-symbol spread/tick/precision only for those
@@ -672,7 +782,12 @@ wsStock.on("data", (d) => {
 // (so single-engine or local engine emits get propagated to other workers)
 // ========================
 function publishEngineEvent(eventType, payload) {
-  const wrapper = JSON.stringify({ eventType, payload, ts: Date.now() });
+  const wrapper = JSON.stringify({
+    eventType,
+    payload,
+    ts: Date.now(),
+    senderId: INSTANCE_ID,
+  });
   redisPub.publish(REDIS_CHANNEL, wrapper).catch((err) => {
     DBG("[ALLTICK-MGR][REDIS] publish error", err && err.message ? err.message : err);
   });
@@ -681,6 +796,7 @@ function publishEngineEvent(eventType, payload) {
 const forwardableEvents = [
   "LIVE_ACCOUNT",
   "LIVE_POSITION",
+  "LIVE_POSITION_CLOSED",
   "LIVE_PENDING",
   "LIVE_PENDING_EXECUTE",
   "LIVE_PENDING_CANCEL",
@@ -692,6 +808,7 @@ forwardableEvents.forEach((ev) => {
   engineEvents.on(ev, (payload) => {
     try {
       DBG("engineEvents", ev, "->", payload?.accountId ?? payload?.orderId ?? "?");
+      forwardEventToLocalClients(ev, payload);
       publishEngineEvent(ev, payload);
     } catch (err) {
       ERROR(`[ENGINE] publish ${ev} error`, err && err.message ? err.message : err);
@@ -712,93 +829,12 @@ redisSub.on("message", (channel, message) => {
     return;
   }
 
-  const { eventType, payload } = obj;
+  const { eventType, payload, senderId } = obj;
   if (!eventType || !payload) return;
+  if (senderId && senderId === INSTANCE_ID) return;
 
   DBG("redisSub message ->", eventType, payload?.accountId ?? payload?.orderId ?? null);
-
-  if (eventType === "LIVE_ACCOUNT") {
-    const s = accountIdMap.get(String(payload.accountId));
-    if (!s || s.size === 0) return;
-    const msgStr = JSON.stringify({ type: "live_account", data: payload });
-    let sent = 0;
-    for (const clientId of s) {
-      const ws = wsClients.get(clientId);
-      if (!ws || ws.readyState !== WebSocket.OPEN) continue;
-      if (!ws.routes || !ws.routes.has("account")) continue;
-      try {
-        ws.send(msgStr);
-        sent++;
-      } catch (err) {
-        ERROR("[WS SEND ERROR] live_account ->", err && err.message ? err.message : err);
-      }
-    }
-    DBG(`forwarded live_account to ${sent}/${s.size} clients for account ${payload.accountId}`);
-    return;
-  }
-
-  if (eventType === "LIVE_POSITION") {
-    const s = accountIdMap.get(String(payload.accountId));
-    if (!s || s.size === 0) return;
-    const msgStr = JSON.stringify({ type: "live_position", data: payload });
-    let sent = 0;
-    for (const clientId of s) {
-      const ws = wsClients.get(clientId);
-      if (!ws || ws.readyState !== WebSocket.OPEN) continue;
-      if (!ws.routes || !ws.routes.has("account")) continue;
-      try {
-        ws.send(msgStr);
-        sent++;
-      } catch (err) {
-        ERROR("[WS SEND ERROR] live_position ->", err && err.message ? err.message : err);
-      }
-    }
-    DBG(`forwarded live_position to ${sent}/${s.size} clients for account ${payload.accountId}`);
-    return;
-  }
-
-  if (
-    [
-      "LIVE_PENDING",
-      "LIVE_PENDING_EXECUTE",
-      "LIVE_PENDING_CANCEL",
-      "LIVE_PENDING_EXECUTE_FAILED",
-      "LIVE_PENDING_MODIFY",
-    ].includes(eventType)
-  ) {
-    const accountId = String(payload.accountId);
-    const clients = accountIdMap.get(accountId);
-    if (!clients || clients.size === 0) {
-      DBG("no subscribers for pending event account", accountId);
-      return;
-    }
-
-    const typeMap = {
-      LIVE_PENDING: "live_pending",
-      LIVE_PENDING_EXECUTE: "live_pending_execute",
-      LIVE_PENDING_CANCEL: "live_pending_cancel",
-      LIVE_PENDING_EXECUTE_FAILED: "live_pending_execute_failed",
-      LIVE_PENDING_MODIFY: "live_pending_modify",
-    };
-
-    const type = typeMap[eventType] || "live_pending";
-
-    const msgStr = JSON.stringify({ type, data: payload });
-    let sent = 0;
-    for (const clientId of clients) {
-      const ws = wsClients.get(clientId);
-      if (!ws || ws.readyState !== WebSocket.OPEN) continue;
-      if (!ws.routes || !ws.routes.has("account")) continue;
-      try {
-        ws.send(msgStr);
-        sent++;
-      } catch (err) {
-        ERROR("[WS SEND ERROR]", type, "->", err && err.message ? err.message : err);
-      }
-    }
-    DBG(`forwarded ${type} to ${sent}/${clients.size} clients for account ${accountId}`);
-    return;
-  }
+  forwardEventToLocalClients(eventType, payload);
 });
 
 // ========================
