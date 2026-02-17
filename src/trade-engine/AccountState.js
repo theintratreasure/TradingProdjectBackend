@@ -30,6 +30,7 @@ export class AccountState {
 
     this.usedMargin = 0;
     this.equity = this.balance + this.bonus_live;
+    this.freeMarginRaw = this.equity;
     this.freeMargin = this.equity;
   }
 
@@ -57,6 +58,7 @@ export class AccountState {
       : 0;
 
     this.equity = this.balance + this.bonus_live + floatingPnL;
-    this.freeMargin = this.equity - this.usedMargin;
+    this.freeMarginRaw = this.equity - this.usedMargin;
+    this.freeMargin = this.freeMarginRaw < 0 ? 0 : this.freeMarginRaw;
   }
 }

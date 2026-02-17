@@ -402,26 +402,45 @@ export class Engine {
         buckets.set(pos.symbol, {
           buy: 0,
           sell: 0,
+          buyNotional: 0,
+          sellNotional: 0,
           contractSize: pos.contractSize,
           leverage: pos.leverage,
         });
       }
 
       const b = buckets.get(pos.symbol);
+      const vol = Number(pos.volume) || 0;
+      const openPrice = Number(pos.openPrice) || 0;
 
-      if (pos.side === "BUY") b.buy += pos.volume;
-      else b.sell += pos.volume;
+      if (pos.side === "BUY") {
+        b.buy += vol;
+        b.buyNotional += vol * openPrice;
+      } else {
+        b.sell += vol;
+        b.sellNotional += vol * openPrice;
+      }
     }
 
     for (const [symbol, b] of buckets.entries()) {
-      const sym = this.symbols.get(symbol);
-      if (!sym) continue;
-
       const net = Math.abs(b.buy - b.sell);
       if (net <= 0) continue;
 
-      // use market price for margin calculation (raw)
-      const price = b.buy > b.sell ? sym.ask : sym.bid;
+      let price = 0;
+      if (b.buy > b.sell) {
+        price = b.buy > 0 ? b.buyNotional / b.buy : 0;
+      } else {
+        price = b.sell > 0 ? b.sellNotional / b.sell : 0;
+      }
+
+      if (!Number.isFinite(price) || price <= 0) {
+        const sym = this.symbols.get(symbol);
+        if (sym) {
+          price = b.buy > b.sell ? sym.ask : sym.bid;
+        }
+      }
+
+      if (!Number.isFinite(price) || price <= 0) continue;
 
       totalMargin += (net * b.contractSize * price) / b.leverage;
     }
@@ -507,7 +526,11 @@ export class Engine {
     // recalc margin BEFORE final checks
     this.recalcUsedMargin(account);
 
-    if (account.freeMargin < 0) {
+    const freeMarginRaw =
+      typeof account.freeMarginRaw === "number"
+        ? account.freeMarginRaw
+        : account.freeMargin;
+    if (freeMarginRaw < 0) {
       // rollback
       account.positions.delete(position.positionId);
       this.recalcUsedMargin(account);
