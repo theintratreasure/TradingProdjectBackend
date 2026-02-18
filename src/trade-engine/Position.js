@@ -30,13 +30,22 @@ export class Position {
     this.openTime = Date.now();
   }
 
-  updatePnL(bid, ask) {
+  updatePnL(bid, ask, contractSizeOverride) {
+    const csRaw =
+      typeof contractSizeOverride === "number" &&
+      Number.isFinite(contractSizeOverride) &&
+      contractSizeOverride > 0
+        ? contractSizeOverride
+        : this.contractSize;
+
+    const cs = Number.isFinite(Number(csRaw)) && Number(csRaw) > 0 ? Number(csRaw) : 1;
+
+    this.contractSize = cs;
+
     if (this.side === "BUY") {
-      this.floatingPnL =
-        (bid - this.openPrice) * this.volume * this.contractSize;
+      this.floatingPnL = (bid - this.openPrice) * this.volume * cs;
     } else {
-      this.floatingPnL =
-        (this.openPrice - ask) * this.volume * this.contractSize;
+      this.floatingPnL = (this.openPrice - ask) * this.volume * cs;
     }
   }
 }

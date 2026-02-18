@@ -198,8 +198,15 @@ export class Engine {
 
   loadSymbol(symbol, config) {
     // config may contain: contractSize, maxLeverage, spread, tickSize, pricePrecision
+    const safeContractSize = Number(config?.contractSize);
+    const contractSize =
+      Number.isFinite(safeContractSize) && safeContractSize > 0
+        ? safeContractSize
+        : 1;
+
     this.symbols.set(symbol, {
       ...config,
+      contractSize,
       bid: 0,
       ask: 0,
       rawBid: 0,
@@ -252,11 +259,13 @@ export class Engine {
   ========================== */
 
   // Round a number to nearest tick safely
-  roundToTick(value, tick) {
+  roundToTick(value, tick, isBid) {
     if (!tick || tick <= 0) return value;
     // avoid floating precision issues by using integer math when possible
     const factor = 1 / tick;
-    return Math.round(value * factor) / factor;
+    return isBid
+      ? Math.floor(value * factor) / factor // bids down
+      : Math.ceil(value * factor) / factor; // asks up
   }
 
   /**
@@ -295,10 +304,10 @@ export class Engine {
       }
     }
 
-    // tick rounding
+    // tick rounding (bid down, ask up)
     if (typeof sym.tickSize === "number" && sym.tickSize > 0) {
-      outBid = this.roundToTick(outBid, sym.tickSize);
-      outAsk = this.roundToTick(outAsk, sym.tickSize);
+      outBid = this.roundToTick(outBid, sym.tickSize, true);
+      outAsk = this.roundToTick(outAsk, sym.tickSize, false);
     }
 
     // apply precision
@@ -318,6 +327,14 @@ export class Engine {
     const account = this.accounts.get(String(trade.accountId));
     if (!account) return;
 
+    const sym = this.symbols.get(trade.symbol);
+    const csRaw =
+      sym && typeof sym.contractSize === "number"
+        ? sym.contractSize
+        : trade.contractSize;
+    const contractSize =
+      Number.isFinite(Number(csRaw)) && Number(csRaw) > 0 ? Number(csRaw) : 1;
+
     const position = new Position({
       positionId: trade.positionId,
       accountId: String(trade.accountId),
@@ -325,7 +342,7 @@ export class Engine {
       side: trade.side,
       volume: trade.volume,
       openPrice: trade.openPrice,
-      contractSize: trade.contractSize,
+      contractSize,
       leverage: trade.leverage,
       stopLoss: trade.stopLoss,
       takeProfit: trade.takeProfit,
@@ -409,13 +426,23 @@ export class Engine {
     const buckets = new Map();
 
     for (const pos of account.positions.values()) {
+      const sym = this.symbols.get(pos.symbol);
+      const csRaw =
+        sym && typeof sym.contractSize === "number"
+          ? sym.contractSize
+          : pos.contractSize;
+      const contractSize =
+        Number.isFinite(Number(csRaw)) && Number(csRaw) > 0
+          ? Number(csRaw)
+          : 1;
+
       if (!buckets.has(pos.symbol)) {
         buckets.set(pos.symbol, {
           buy: 0,
           sell: 0,
           buyNotional: 0,
           sellNotional: 0,
-          contractSize: pos.contractSize,
+          contractSize,
           leverage: pos.leverage,
         });
       }
@@ -1150,7 +1177,7 @@ export class Engine {
           formatted = { bid, ask };
         }
 
-        pos.updatePnL(formatted.bid, formatted.ask);
+        pos.updatePnL(formatted.bid, formatted.ask, sym?.contractSize);
 
         const currentPrice = pos.side === "BUY" ? formatted.bid : formatted.ask;
 
@@ -1254,7 +1281,7 @@ export class Engine {
       formatted = { bid: sym.bid, ask: sym.ask };
     }
 
-    pos.updatePnL(formatted.bid, formatted.ask);
+    pos.updatePnL(formatted.bid, formatted.ask, sym?.contractSize);
 
     account.positions.delete(pos.positionId);
 
