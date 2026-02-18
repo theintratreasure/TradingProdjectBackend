@@ -6,11 +6,66 @@ import AccountPlan from "../models/AccountPlan.model.js";
 import DepositModel from "../models/Deposit.model.js";
 import User from "../models/User.model.js";
 import Transaction from "../models/Transaction.model.js";
+import PaymentMethod from "../models/PaymentMethod.model.js";
 import redis from "../config/redis.js";
 import EngineSync from "../trade-engine/EngineSync.js";
 import { publishAccountBalance } from "../trade-engine/EngineSyncBus.js";
 import { createReferralRewardEligibility } from "./referral.service.js";
 import { getEffectiveBonusPercentForAccount } from "./bonus.service.js";
+
+const DEPOSIT_METHODS = new Set([
+  "UPI",
+  "BANK",
+  "CRYPTO",
+  "MANUAL",
+  "INTERNATIONAL",
+]);
+
+const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+async function normalizeDepositMethod(rawMethod) {
+  if (!rawMethod) return null;
+
+  const label = String(rawMethod).trim();
+  if (!label) return null;
+
+  const upper = label.toUpperCase();
+  if (DEPOSIT_METHODS.has(upper)) return upper;
+
+  // Try to map by PaymentMethod title (case-insensitive)
+  try {
+    const pm = await PaymentMethod.findOne({
+      title: new RegExp(`^${escapeRegex(label)}$`, "i"),
+      is_active: true,
+    }).lean();
+
+    if (pm?.type && DEPOSIT_METHODS.has(pm.type)) {
+      return pm.type;
+    }
+  } catch {
+    // ignore lookup errors; fallback to heuristic
+  }
+
+  const normalized = upper.replace(/\s+/g, " ");
+
+  if (normalized.includes("UPI")) return "UPI";
+  if (normalized.includes("BANK")) return "BANK";
+  if (normalized.includes("NETELLER") || normalized.includes("SKRILL")) {
+    return "INTERNATIONAL";
+  }
+  if (
+    normalized.includes("USDT") ||
+    normalized.includes("BTC") ||
+    normalized.includes("ETH") ||
+    normalized.includes("TRC20") ||
+    normalized.includes("ERC20") ||
+    normalized.includes("CRYPTO")
+  ) {
+    return "CRYPTO";
+  }
+
+  return null;
+}
 
 export async function createDepositService({
   userId,
@@ -75,11 +130,18 @@ export async function createDepositService({
 
   /* ---------------- CREATE DEPOSIT ---------------- */
 
+  const normalizedMethod = await normalizeDepositMethod(method);
+  if (!normalizedMethod) {
+    throw new Error(
+      "Invalid deposit method. Allowed: UPI, BANK, CRYPTO, INTERNATIONAL, MANUAL",
+    );
+  }
+
   const deposit = await Deposit.create({
     user: userId,
     account,
     amount,
-    method,
+    method: normalizedMethod,
     proof,
     ipAddress,
   });
@@ -277,8 +339,10 @@ export async function adminSearchDepositsService(query = {}) {
   const methodRaw =
     typeof query.method === "string" ? query.method.trim().toUpperCase() : "";
   if (methodRaw) {
-    if (!["UPI", "BANK", "CRYPTO", "MANUAL"].includes(methodRaw)) {
-      throw new Error("Invalid method. Allowed: UPI, BANK, CRYPTO, MANUAL");
+    if (!DEPOSIT_METHODS.has(methodRaw)) {
+      throw new Error(
+        "Invalid method. Allowed: UPI, BANK, CRYPTO, INTERNATIONAL, MANUAL",
+      );
     }
     match.method = methodRaw;
   }
@@ -690,6 +754,13 @@ export async function adminCreateDepositService({
     throw new Error("Invalid deposit amount");
   }
 
+  const normalizedMethod = await normalizeDepositMethod(method);
+  if (!normalizedMethod) {
+    throw new Error(
+      "Invalid deposit method. Allowed: UPI, BANK, CRYPTO, INTERNATIONAL, MANUAL",
+    );
+  }
+
   const safeProof = proof && typeof proof === "object"
     ? proof
     : { image_url: "", image_public_id: "" };
@@ -731,7 +802,7 @@ export async function adminCreateDepositService({
             user: account.user_id,
             account: account._id,
             amount,
-            method,
+            method: normalizedMethod,
             proof: safeProof,
             bonus_percent: Number(bonusPercent || 0),
             bonus_amount: Number(bonusAmount || 0),

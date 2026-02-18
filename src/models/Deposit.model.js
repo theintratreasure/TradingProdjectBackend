@@ -24,7 +24,7 @@ const depositSchema = new mongoose.Schema(
 
     method: {
       type: String,
-      enum: ['UPI', 'BANK', 'CRYPTO', 'MANUAL'],
+      enum: ['UPI', 'BANK', 'CRYPTO', 'MANUAL', 'INTERNATIONAL'],
       required: true
     },
 
