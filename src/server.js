@@ -77,6 +77,7 @@ async function start() {
       contractSize: 1,
       maxLeverage: 1,
       spread: 1,
+      spread_mode: 1,
       tickSize: 1,
       pricePrecision: 1,
     },

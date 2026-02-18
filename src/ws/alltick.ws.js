@@ -1050,7 +1050,7 @@ export async function handleClientMessage(clientWs, msg) {
                   pbid = applyTickAndPrecision(pbid, tick, prec, true);
                   pask = applyTickAndPrecision(pask, tick, prec, false);
 
-                  currentPriceToSend = pos.side === "BUY" ? pask : pbid;
+                  currentPriceToSend = pos.side === "BUY" ? pbid : pask;
                 } else {
                   currentPriceToSend = pos.openPrice;
                 }

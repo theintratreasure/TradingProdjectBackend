@@ -1152,7 +1152,7 @@ export class Engine {
 
         pos.updatePnL(formatted.bid, formatted.ask);
 
-        const currentPrice = pos.side === "BUY" ? formatted.ask : formatted.bid;
+        const currentPrice = pos.side === "BUY" ? formatted.bid : formatted.ask;
 
         try {
           engineEvents.emit("LIVE_POSITION", {
