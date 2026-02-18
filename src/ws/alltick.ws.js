@@ -625,21 +625,19 @@ function broadcastData(market, data) {
 
       if (!Number.isFinite(bestBid) || !Number.isFinite(bestAsk)) {
         skipReason = { reason: "bad_prices", bestBidRaw, bestAskRaw };
-      } else if (!acc) {
-        skipReason = { reason: "no_account_attached", clientId: id, accountId: ws.accountId || null };
-      } else if (acc.spread_enabled === false) {
-        skipReason = { reason: "spread_disabled_on_account", accountId: ws.accountId };
       } else {
         // try to fetch symbol object from engine
         const sym = findSymbolInEngine(symbol);
         if (!sym) {
           skipReason = { reason: "symbol_missing_in_engine", symbol, engineSymbolCount: tradeEngine.symbols?.size ?? 0 };
         } else {
+          const accountForPrice = acc && acc.spread_enabled !== false ? acc : null;
+
           // try engine.formatPrice (if exists)
           let formatted = null;
           if (typeof tradeEngine.formatPrice === "function") {
             try {
-              const maybe = tradeEngine.formatPrice(acc, sym, bestBid, bestAsk);
+              const maybe = tradeEngine.formatPrice(accountForPrice, sym, bestBid, bestAsk);
               if (maybe && typeof maybe.bid === "number" && typeof maybe.ask === "number" && Number.isFinite(maybe.bid) && Number.isFinite(maybe.ask)) {
                 formatted = { bid: maybe.bid, ask: maybe.ask, src: "engine.formatPrice" };
               } else {
@@ -663,7 +661,7 @@ function broadcastData(market, data) {
             let pbid = bestBid;
             let pask = bestAsk;
 
-            if (spread > 0) {
+            if (accountForPrice && spread > 0) {
               const half = spread / 2;
               if (spreadMode === "FIXED" && Number.isFinite(pbid) && Number.isFinite(pask)) {
                 const mid = (pbid + pask) / 2;
