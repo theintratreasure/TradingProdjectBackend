@@ -2,34 +2,89 @@
 <html>
   <head>
     <meta charset="UTF-8" />
-    <title>{{APP_NAME}} - Account Created</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ALS Trades - Account Created</title>
   </head>
-  <body style="font-family: Arial, sans-serif; background:#f6f6f6; padding:20px;">
-    <div style="max-width:600px; margin:auto; background:#ffffff; padding:20px;">
-      <h2>Welcome to {{APP_NAME}}</h2>
 
-      <p>Your trading account has been created successfully.</p>
-
-      <h3>Account Details</h3>
-      <ul>
-        <li><strong>Account Number:</strong> {{ACCOUNT_NUMBER}}</li>
-        <li><strong>Account Type:</strong> {{ACCOUNT_TYPE}}</li>
-        <li><strong>Plan:</strong> {{PLAN_NAME}}</li>
-      </ul>
-
-      <h3>Login Credentials</h3>
-      <p><strong>Trade Password:</strong> {{TRADE_PASSWORD}}</p>
-      <p><strong>Watch Password:</strong> {{WATCH_PASSWORD}}</p>
-
-      <p style="color:#b00;">
-        ⚠️ Please save these passwords securely.  
-        You will not be able to view them again.
-      </p>
-
-      <p>Happy Trading,<br />{{APP_NAME}} Team</p>
-
-      <hr />
-      <small>© {{YEAR}} {{APP_NAME}}</small>
+  <body style="margin:0;padding:0;background:#0b1220;font-family:Arial,Helvetica,sans-serif;">
+    <div style="display:none;max-height:0;overflow:hidden;font-size:1px;line-height:1px;color:#0b1220;opacity:0;">
+      Your ALS Trades account is ready. Login credentials inside.
     </div>
+
+    <table width="100%" cellpadding="0" cellspacing="0" style="background:#0b1220;">
+      <tr>
+        <td align="center" style="padding:50px 16px;">
+          <table width="640" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:14px;overflow:hidden;box-shadow:0 12px 32px rgba(8,12,24,0.35);">
+
+            <!-- Header -->
+            <tr>
+              <td style="background:linear-gradient(135deg,#0b1220 0%,#0f2a4a 55%,#1b4f8a 100%);padding:28px 36px;">
+                <div style="font-size:13px;letter-spacing:3px;text-transform:uppercase;color:#9fb2c8;">
+                  Premium Forex Broker
+                </div>
+                <h1 style="margin:8px 0 0 0;color:#ffffff;font-size:28px;line-height:1.2;">
+                  ALS Trades
+                </h1>
+              </td>
+            </tr>
+
+            <!-- Body -->
+            <tr>
+              <td style="padding:36px;color:#0f172a;">
+                <h2 style="margin:0 0 14px 0;color:#0b1c2d;font-size:22px;">
+                  Your trading account is ready
+                </h2>
+
+                <p style="font-size:16px;line-height:1.7;margin:0 0 18px 0;color:#1f2937;">
+                  Welcome to ALS Trades. Your account has been created successfully. Below are your account details and secure login credentials.
+                </p>
+
+                <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px;margin:18px 0;">
+                  <h3 style="margin:0 0 10px 0;color:#0b1c2d;font-size:16px;">Account Details</h3>
+                  <table width="100%" cellpadding="0" cellspacing="0" style="font-size:14px;color:#334155;">
+                    <tr>
+                      <td style="padding:6px 0;width:160px;"><strong>Account Number:</strong></td>
+                      <td style="padding:6px 0;">{{ACCOUNT_NUMBER}}</td>
+                    </tr>
+                    <tr>
+                      <td style="padding:6px 0;"><strong>Account Type:</strong></td>
+                      <td style="padding:6px 0;">{{ACCOUNT_TYPE}}</td>
+                    </tr>
+                    <tr>
+                      <td style="padding:6px 0;"><strong>Plan:</strong></td>
+                      <td style="padding:6px 0;">{{PLAN_NAME}}</td>
+                    </tr>
+                  </table>
+                </div>
+
+                <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:12px;padding:16px 18px;margin:18px 0;">
+                  <h3 style="margin:0 0 10px 0;color:#7c2d12;font-size:16px;">Login Credentials</h3>
+                  <p style="font-size:14px;color:#7c2d12;margin:0 0 6px 0;"><strong>Trade Password:</strong> {{TRADE_PASSWORD}}</p>
+                  <p style="font-size:14px;color:#7c2d12;margin:0;"><strong>Watch Password:</strong> {{WATCH_PASSWORD}}</p>
+                </div>
+
+                <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:12px 14px;margin:18px 0;">
+                  <p style="font-size:14px;color:#991b1b;line-height:1.6;margin:0;">
+                    ⚠️ Please save these passwords securely. You will not be able to view them again.
+                  </p>
+                </div>
+
+                <p style="font-size:15px;color:#1f2937;margin:0;">
+                  Happy Trading,<br />ALS Trades Team
+                </p>
+              </td>
+            </tr>
+
+            <!-- Footer -->
+            <tr>
+              <td style="background:linear-gradient(135deg,#0b1220 0%,#0f2741 100%);padding:18px 36px;color:#a3b3c7;font-size:12px;">
+                © {{YEAR}} ALS Trades. All rights reserved.
+              </td>
+            </tr>
+
+          </table>
+        </td>
+      </tr>
+    </table>
   </body>
 </html>
