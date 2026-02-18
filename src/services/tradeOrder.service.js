@@ -525,6 +525,8 @@ export async function getPositionsService({
       volume: 1,
       openPrice: 1,
       closePrice: 1,
+      contractSize: 1,
+      realizedPnL: 1,
       openTime: 1,
       closeTime: 1,
       stopLoss: 1,
@@ -550,12 +552,17 @@ export async function getPositionsService({
 
     // ✅ Only calculate for CLOSED trades
     if (p.status === "CLOSED" && p.closePrice) {
-      if (p.side === "BUY") {
-        profitLoss = (p.closePrice - p.openPrice) * p.volume;
-      }
+      if (Number.isFinite(Number(p.realizedPnL))) {
+        profitLoss = Number(p.realizedPnL);
+      } else {
+        const contractSize = Number(p.contractSize) || 1;
+        if (p.side === "BUY") {
+          profitLoss = (p.closePrice - p.openPrice) * p.volume * contractSize;
+        }
 
-      if (p.side === "SELL") {
-        profitLoss = (p.openPrice - p.closePrice) * p.volume;
+        if (p.side === "SELL") {
+          profitLoss = (p.openPrice - p.closePrice) * p.volume * contractSize;
+        }
       }
     }
 
