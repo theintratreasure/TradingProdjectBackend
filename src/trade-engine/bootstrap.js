@@ -51,6 +51,10 @@ export async function bootstrapEngine({ accounts, symbols }) {
 
       // pricing rules (from Instrument)
       spread: Number(sym.spread) || 0,
+      spread_mode:
+        typeof sym.spread_mode === "string"
+          ? sym.spread_mode.trim().toUpperCase()
+          : "ADD_ON",
       tickSize: Number(sym.tickSize) || 0,
       pricePrecision:
         typeof sym.pricePrecision === "number"

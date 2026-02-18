@@ -653,6 +653,10 @@ function broadcastData(market, data) {
           // fallback simple formatting
           if (!formatted) {
             const spread = typeof sym.spread === "number" ? sym.spread : 0;
+            const spreadMode =
+              typeof sym.spread_mode === "string"
+                ? sym.spread_mode.trim().toUpperCase()
+                : "ADD_ON";
             const tick = typeof sym.tickSize === "number" ? sym.tickSize : 0;
             const prec = typeof sym.pricePrecision === "number" ? sym.pricePrecision : undefined;
 
@@ -661,8 +665,14 @@ function broadcastData(market, data) {
 
             if (spread > 0) {
               const half = spread / 2;
-              pbid = pbid - half;
-              pask = pask + half;
+              if (spreadMode === "FIXED" && Number.isFinite(pbid) && Number.isFinite(pask)) {
+                const mid = (pbid + pask) / 2;
+                pbid = mid - half;
+                pask = mid + half;
+              } else {
+                pbid = pbid - half;
+                pask = pask + half;
+              }
             }
 
             // enforce tick & precision: bid down, ask up
@@ -1018,6 +1028,10 @@ export async function handleClientMessage(clientWs, msg) {
                   const latestBid = Number(sym.bid || sym.rawBid || 0) || pos.openPrice;
                   const latestAsk = Number(sym.ask || sym.rawAsk || 0) || pos.openPrice;
                   const spread = typeof sym.spread === "number" ? sym.spread : 0;
+                  const spreadMode =
+                    typeof sym.spread_mode === "string"
+                      ? sym.spread_mode.trim().toUpperCase()
+                      : "ADD_ON";
                   const tick = typeof sym.tickSize === "number" ? sym.tickSize : 0;
                   const prec = typeof sym.pricePrecision === "number" ? sym.pricePrecision : undefined;
 
@@ -1026,8 +1040,14 @@ export async function handleClientMessage(clientWs, msg) {
 
                   if (spread > 0) {
                     const half = spread / 2;
-                    pbid = pbid - half;
-                    pask = pask + half;
+                    if (spreadMode === "FIXED" && Number.isFinite(pbid) && Number.isFinite(pask)) {
+                      const mid = (pbid + pask) / 2;
+                      pbid = mid - half;
+                      pask = mid + half;
+                    } else {
+                      pbid = pbid - half;
+                      pask = pask + half;
+                    }
                   }
                   pbid = applyTickAndPrecision(pbid, tick, prec, true);
                   pask = applyTickAndPrecision(pask, tick, prec, false);

@@ -71,6 +71,11 @@ const InstrumentSchema = new mongoose.Schema(
       required: true,
       default: 0
     },
+    spread_mode: {
+      type: String,
+      enum: ['ADD_ON', 'FIXED'],
+      default: 'ADD_ON'
+    },
 
     /* =========================
        CONTRACT DETAILS

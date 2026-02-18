@@ -9,6 +9,7 @@ const COUNT_TTL = 300;
 const VERSION_KEY = 'instruments:version';
 const LIST_KEY = 'instruments:list';
 const COUNT_KEY = 'instruments:count';
+const SPREAD_MODES = new Set(['ADD_ON', 'FIXED']);
 
 
 export const createInstrumentService = async (payload) => {
@@ -23,6 +24,7 @@ export const createInstrumentService = async (payload) => {
     pricePrecision,
     tickSize,
     spread,
+    spread_mode,
     contractSize,
     swapEnabled,
     swapLong,
@@ -50,6 +52,14 @@ export const createInstrumentService = async (payload) => {
     throw new Error('spread cannot be negative');
   }
 
+  let normalizedSpreadMode = 'ADD_ON';
+  if (spread_mode !== undefined && spread_mode !== null && spread_mode !== '') {
+    normalizedSpreadMode = String(spread_mode).trim().toUpperCase();
+    if (!SPREAD_MODES.has(normalizedSpreadMode)) {
+      throw new Error('Invalid spread_mode. Allowed: ADD_ON, FIXED');
+    }
+  }
+
   /* =========================
      DUPLICATE CHECK (FAST)
   ========================== */
@@ -75,6 +85,7 @@ export const createInstrumentService = async (payload) => {
     pricePrecision,
     tickSize,
     spread,
+    spread_mode: normalizedSpreadMode,
     contractSize,
     swapEnabled,
     swapLong,
@@ -210,6 +221,18 @@ export const updateInstrumentService = async (id, payload) => {
   ========================== */
   if (payload.spread !== undefined && payload.spread < 0) {
     throw new Error('spread cannot be negative');
+  }
+
+  if (
+    payload.spread_mode !== undefined &&
+    payload.spread_mode !== null &&
+    payload.spread_mode !== ''
+  ) {
+    const nextMode = String(payload.spread_mode).trim().toUpperCase();
+    if (!SPREAD_MODES.has(nextMode)) {
+      throw new Error('Invalid spread_mode. Allowed: ADD_ON, FIXED');
+    }
+    payload.spread_mode = nextMode;
   }
 
   /* =========================

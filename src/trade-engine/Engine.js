@@ -280,8 +280,19 @@ export class Engine {
       sym.spread > 0
     ) {
       const half = sym.spread / 2;
-      outBid = outBid - half;
-      outAsk = outAsk + half;
+      const mode =
+        typeof sym.spread_mode === "string"
+          ? sym.spread_mode.trim().toUpperCase()
+          : "ADD_ON";
+
+      if (mode === "FIXED" && Number.isFinite(outBid) && Number.isFinite(outAsk)) {
+        const mid = (outBid + outAsk) / 2;
+        outBid = mid - half;
+        outAsk = mid + half;
+      } else {
+        outBid = outBid - half;
+        outAsk = outAsk + half;
+      }
     }
 
     // tick rounding

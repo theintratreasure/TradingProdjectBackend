@@ -278,6 +278,10 @@ class EngineSync {
       contractSize: Number(instrument.contractSize) || 1,
       maxLeverage: Number(instrument.maxLeverage) || 2000,
       spread: Number(instrument.spread) || 0,
+      spread_mode:
+        typeof instrument.spread_mode === "string"
+          ? instrument.spread_mode.trim().toUpperCase()
+          : "ADD_ON",
       tickSize: Number(instrument.tickSize) || 0,
       pricePrecision:
         typeof instrument.pricePrecision === "number"
