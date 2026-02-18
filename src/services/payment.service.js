@@ -73,6 +73,16 @@ export async function createPaymentMethodService(userId, body) {
     payload.crypto_address = body.crypto_address;
   }
 
+  if (type === 'INTERNATIONAL') {
+    if (!body.international_name || !body.international_email) {
+      const err = new Error('International name and email are required');
+      err.code = 'INVALID_INPUT';
+      throw err;
+    }
+    payload.international_name = body.international_name;
+    payload.international_email = body.international_email;
+  }
+
   const created = await PaymentMethod.create(payload);
   await clearPaymentMethodCache();
 

@@ -4,7 +4,7 @@ const paymentMethodSchema = new mongoose.Schema(
   {
     type: {
       type: String,
-      enum: ['BANK', 'UPI', 'CRYPTO'],
+      enum: ['BANK', 'UPI', 'CRYPTO', 'INTERNATIONAL'],
       required: true,
       index: true
     },
@@ -26,6 +26,10 @@ const paymentMethodSchema = new mongoose.Schema(
     // CRYPTO
     crypto_network: String,
     crypto_address: String,
+
+    // INTERNATIONAL (Neteller/Skrill)
+    international_name: String,
+    international_email: String,
 
     // IMAGE (Cloudinary)
     image_url: {
