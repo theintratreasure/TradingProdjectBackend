@@ -38,19 +38,24 @@ export async function accountLoginService({
     throw new Error("Account auth not found or locked");
   }
 
-  let sessionType = null;
+  const tradeOk =
+    Boolean(auth.trade_password_hash) &&
+    (await comparePassword(password, auth.trade_password_hash));
+  const watchOk =
+    Boolean(auth.watch_password_hash) &&
+    (await comparePassword(password, auth.watch_password_hash));
 
-  if (
-    auth.trade_password_hash &&
-    (await comparePassword(password, auth.trade_password_hash))
-  ) {
-    sessionType = "TRADE";
-  } else if (
-    auth.watch_password_hash &&
-    (await comparePassword(password, auth.watch_password_hash))
-  ) {
-    sessionType = "WATCH";
+  // Security: trade & watch passwords must never be the same.
+  // If the same password matches both hashes, the account is misconfigured.
+  if (tradeOk && watchOk) {
+    throw new Error(
+      "Trade and watch passwords must be different. Please reset one of them",
+    );
   }
+
+  let sessionType = null;
+  if (tradeOk) sessionType = "TRADE";
+  else if (watchOk) sessionType = "WATCH";
 
   if (!sessionType) {
     await AccountAuth.updateOne(
@@ -124,10 +129,17 @@ export async function resetTradePasswordService({
 
   const auth = await AccountAuth.findOne({
     account_id: account._id,
-  });
+  }).select("+watch_password_hash");
 
   if (!auth) {
     throw new Error("Account auth not found");
+  }
+
+  if (
+    auth.watch_password_hash &&
+    (await comparePassword(newPassword, auth.watch_password_hash))
+  ) {
+    throw new Error("Trade password must be different from watch password");
   }
 
   const newPasswordHash = await hashPassword(newPassword);
@@ -185,10 +197,17 @@ export async function resetWatchPasswordService({
 
   const auth = await AccountAuth.findOne({
     account_id: account._id,
-  });
+  }).select("+trade_password_hash");
 
   if (!auth) {
     throw new Error("Account auth not found");
+  }
+
+  if (
+    auth.trade_password_hash &&
+    (await comparePassword(newPassword, auth.trade_password_hash))
+  ) {
+    throw new Error("Watch password must be different from trade password");
   }
 
   const newPasswordHash = await hashPassword(newPassword);
@@ -244,10 +263,18 @@ export async function adminResetTradePasswordService({
 
   const auth = await AccountAuth.findOne({
     account_id: account._id,
-  });
+  }).select("+watch_password_hash");
 
   if (!auth) {
     throw new Error("Account auth not found");
+  }
+
+  // Prevent privilege confusion: WATCH password must never work as TRADE password.
+  if (
+    auth.watch_password_hash &&
+    (await comparePassword(newPassword, auth.watch_password_hash))
+  ) {
+    throw new Error("Trade password must be different from watch password");
   }
 
   const newPasswordHash = await hashPassword(newPassword);
@@ -302,10 +329,18 @@ export async function adminResetWatchPasswordService({
 
   const auth = await AccountAuth.findOne({
     account_id: account._id,
-  });
+  }).select("+trade_password_hash");
 
   if (!auth) {
     throw new Error("Account auth not found");
+  }
+
+  // Prevent privilege confusion: TRADE password must never work as WATCH password.
+  if (
+    auth.trade_password_hash &&
+    (await comparePassword(newPassword, auth.trade_password_hash))
+  ) {
+    throw new Error("Watch password must be different from trade password");
   }
 
   const newPasswordHash = await hashPassword(newPassword);

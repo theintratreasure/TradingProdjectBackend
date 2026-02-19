@@ -110,7 +110,10 @@ export async function createAccount({
   /* ================= PASSWORD ================= */
 
   const tradePass = generateStrongPassword(12);
-  const watchPass = generateStrongPassword(12);
+  let watchPass = generateStrongPassword(12);
+  while (watchPass === tradePass) {
+    watchPass = generateStrongPassword(12);
+  }
 
   const tradeHash = await hashPassword(tradePass);
   const watchHash = await hashPassword(watchPass);
