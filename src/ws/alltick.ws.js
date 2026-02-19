@@ -56,7 +56,8 @@ const normalizeMarket = (v) =>
     .toLowerCase();
 const normalizeSymbol = (v) =>
   String(v || "")
-    .replace(/[^A-Za-z]/g, "")
+    .trim()
+    .replace(/[^A-Za-z0-9]/g, "")
     .toUpperCase();
 const makeKey = (market, symbol) =>
   `${normalizeMarket(market)}:${normalizeSymbol(symbol)}`;
