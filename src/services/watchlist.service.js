@@ -484,19 +484,24 @@ export const watchlistService = {
 async getSegmentInstrumentsWithStatus(userId, accountIdRaw, segmentRaw, limit) {
   const accountId = normalizeAccountId(accountIdRaw);
   const segment = String(segmentRaw || "").trim().toUpperCase();
+  const segmentKey = segment === "COMMODITIES" ? "COMMODITY" : segment;
+  const segmentFilter =
+    segmentKey === "COMMODITY"
+      ? { $in: ["ENERGY", "METAL"] }
+      : segment;
 
   if (!accountId) {
     return { error: { status: 400, message: "AccountId is required" } };
   }
 
-  if (!segment) {
+  if (!segmentKey) {
     return { error: { status: 400, message: "Segment is required" } };
   }
 
   //  Cache key (unique per user + account + segment + limit)
   const cacheKey = `account:segment:watchlist:v1:${String(userId)}:${String(
     accountId
-  )}:${String(segment)}:${String(limit)}`;
+  )}:${String(segmentKey)}:${String(limit)}`;
 
   //  Return fast from Redis
   const cached = await getRedisJSON(cacheKey);
@@ -506,7 +511,7 @@ async getSegmentInstrumentsWithStatus(userId, accountIdRaw, segmentRaw, limit) {
 
   //  fetch instruments segment wise (only active)
   const instruments = await InstrumentModel.find({
-    segment: segment,
+    segment: segmentFilter,
     isActive: true,
   })
     .sort({ createdAt: -1, _id: -1 })
