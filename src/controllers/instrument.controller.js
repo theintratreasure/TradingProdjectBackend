@@ -10,6 +10,18 @@ export const createInstrument = async (req, res) => {
       data: instrument
     });
   } catch (error) {
+    const msg = String(error?.message || "");
+    const isDuplicate =
+      error?.code === 11000 ||
+      msg.toLowerCase().includes("already exists");
+
+    if (isDuplicate) {
+      return res.status(409).json({
+        success: false,
+        message: "This symbol is already added"
+      });
+    }
+
     return res.status(400).json({
       success: false,
       message: error.message
@@ -79,6 +91,18 @@ export const updateInstrument = async (req, res) => {
       data: instrument
     });
   } catch (error) {
+    const msg = String(error?.message || "");
+    const isDuplicate =
+      error?.code === 11000 ||
+      msg.toLowerCase().includes("already exists");
+
+    if (isDuplicate) {
+      return res.status(409).json({
+        success: false,
+        message: "This symbol is already added"
+      });
+    }
+
     return res.status(400).json({
       success: false,
       message: error.message
