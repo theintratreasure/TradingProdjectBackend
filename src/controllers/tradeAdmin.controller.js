@@ -1,6 +1,11 @@
 import mongoose from "mongoose";
+import { randomUUID } from "node:crypto";
 import Account from "../models/Account.model.js";
+import Instrument from "../models/Instrument.model.js";
+import Trade from "../models/Trade.model.js";
+import Transaction from "../models/Transaction.model.js";
 import { tradeEngine } from "../trade-engine/bootstrap.js";
+import { publishAccountBalance } from "../trade-engine/EngineSyncBus.js";
 import {
   adminListBrokerageService,
   adminListClosedTradesService,
@@ -44,6 +49,18 @@ function getRequestIp(req) {
   return req?.ip || req?.connection?.remoteAddress || "SYSTEM";
 }
 
+function toDate(value, fieldName) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    throw new Error(`${fieldName} must be a valid datetime`);
+  }
+  return date;
+}
+
+function generateHistoryPositionId(index = 0) {
+  return randomUUID();
+}
+
 async function getAccountForAdminTrade({ userId, accountId }) {
   if (!userId || !mongoose.isValidObjectId(userId)) {
     throw new Error("Invalid userId");
@@ -62,6 +79,8 @@ async function getAccountForAdminTrade({ userId, accountId }) {
       _id: 1,
       user_id: 1,
       balance: 1,
+      bonus_balance: 1,
+      equity: 1,
       leverage: 1,
       commission_per_lot: 1,
       swap_charge: 1,
@@ -499,6 +518,269 @@ export const adminClosePosition = async (req, res) => {
     return res.status(400).json({
       success: false,
       message: error.message,
+    });
+  }
+};
+
+export const adminBulkCreatePositionHistory = async (req, res) => {
+  try {
+    const { accountId, userId, positions, applyToBalance = true } = req.body || {};
+
+    if (!accountId || !userId) {
+      return res.status(400).json({
+        success: false,
+        message: "accountId and userId are required",
+      });
+    }
+
+    if (!Array.isArray(positions) || positions.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "positions must be a non-empty array",
+      });
+    }
+
+    if (positions.length > 1000) {
+      return res.status(400).json({
+        success: false,
+        message: "Maximum 1000 positions allowed per request",
+      });
+    }
+
+    const account = await getAccountForAdminTrade({ userId, accountId });
+    const ipAddress = getRequestIp(req);
+
+    const symbolSet = new Set();
+    for (const row of positions) {
+      if (row?.symbol) symbolSet.add(normalizeSymbol(row.symbol));
+    }
+
+    const instruments = await Instrument.find({
+      code: { $in: [...symbolSet] },
+    })
+      .select({ code: 1, contractSize: 1 })
+      .lean();
+
+    const contractSizeBySymbol = new Map(
+      instruments.map((item) => [String(item.code).toUpperCase(), Number(item.contractSize) || 1])
+    );
+
+    const docs = positions.map((row, index) => {
+      const symbol = normalizeSymbol(row?.symbol);
+      const side = String(row?.type || row?.side || "")
+        .trim()
+        .toUpperCase();
+
+      if (!symbol) {
+        throw new Error(`positions[${index}].symbol is required`);
+      }
+
+      if (side !== "BUY" && side !== "SELL") {
+        throw new Error(`positions[${index}].type/side must be BUY or SELL`);
+      }
+
+      const volume = toFiniteNumber(row?.volume, `positions[${index}].volume`);
+      if (volume <= 0) {
+        throw new Error(`positions[${index}].volume must be greater than 0`);
+      }
+
+      const openPrice = toFiniteNumber(
+        row?.price ?? row?.openPrice,
+        `positions[${index}].price/openPrice`
+      );
+      const closePrice = toFiniteNumber(
+        row?.closePrice,
+        `positions[${index}].closePrice`
+      );
+
+      const openTime = toDate(row?.openTime, `positions[${index}].openTime`);
+      const closeTime = toDate(row?.closeTime, `positions[${index}].closeTime`);
+
+      if (closeTime < openTime) {
+        throw new Error(`positions[${index}].closeTime must be >= openTime`);
+      }
+
+      const contractSize = contractSizeBySymbol.get(symbol) || 1;
+      const leverage = Number(account.leverage) || 1;
+      const marginUsed = (openPrice * volume * contractSize) / leverage;
+
+      const positionId = generateHistoryPositionId(index);
+      const commission =
+        toOptionalFiniteNumber(row?.commission, `positions[${index}].commission`) || 0;
+      const swap = toOptionalFiniteNumber(row?.swap, `positions[${index}].swap`) || 0;
+      const profit = toOptionalFiniteNumber(row?.profit, `positions[${index}].profit`) || 0;
+
+      return {
+        userId: new mongoose.Types.ObjectId(userId),
+        accountId: new mongoose.Types.ObjectId(accountId),
+        ipAddress,
+        positionId,
+        symbol,
+        side,
+        orderType: "MARKET",
+        status: "CLOSED",
+        volume,
+        contractSize,
+        leverage,
+        openPrice,
+        entryPrice: openPrice,
+        closePrice,
+        stopLoss: toOptionalFiniteNumber(row?.sl ?? row?.stopLoss, `positions[${index}].sl/stopLoss`),
+        takeProfit: toOptionalFiniteNumber(
+          row?.tp ?? row?.takeProfit,
+          `positions[${index}].tp/takeProfit`
+        ),
+        marginUsed,
+        grossPnL: profit,
+        commission,
+        swap,
+        realizedPnL: profit,
+        openTime,
+        closeTime,
+        closeReason: "MANUAL",
+        metadata: {
+          source: "ADMIN_HISTORY_IMPORT",
+        },
+      };
+    });
+
+    const session = await mongoose.startSession();
+    let inserted = [];
+    let newBalance = Number(account.balance) || 0;
+    let newEquity = Number(account.equity) || newBalance;
+    const bonusBalance = Number(account.bonus_balance) || 0;
+
+    try {
+      await session.withTransaction(async () => {
+        inserted = await Trade.insertMany(docs, { ordered: true, session });
+
+        const byPositionId = new Map(
+          inserted.map((tradeDoc) => [String(tradeDoc.positionId), tradeDoc])
+        );
+
+        const transactionsToInsert = [];
+        const docsByCloseTime = [...docs].sort(
+          (a, b) => new Date(a.closeTime).getTime() - new Date(b.closeTime).getTime()
+        );
+
+        for (const tradeDoc of docsByCloseTime) {
+          const linkedTrade = byPositionId.get(String(tradeDoc.positionId));
+          if (!linkedTrade?._id) {
+            throw new Error(`Trade not found after insert for ${tradeDoc.positionId}`);
+          }
+
+          const realized = Number(tradeDoc.realizedPnL) || 0;
+          const commission = Number(tradeDoc.commission) || 0;
+          const swap = Number(tradeDoc.swap) || 0;
+
+          const pnlDelta = applyToBalance ? realized : 0;
+          const commissionDelta = applyToBalance ? -commission : 0;
+          const swapDelta = applyToBalance ? -swap : 0;
+
+          const nextBalance = Number((newBalance + pnlDelta + commissionDelta + swapDelta).toFixed(8));
+          if (nextBalance < 0) {
+            throw new Error(
+              `Import would make account balance negative at position ${tradeDoc.positionId}. Add deposit first or set applyToBalance=false`
+            );
+          }
+
+          newBalance = nextBalance;
+          newEquity = Number((newBalance + bonusBalance).toFixed(8));
+
+          transactionsToInsert.push({
+            user: new mongoose.Types.ObjectId(userId),
+            account: new mongoose.Types.ObjectId(accountId),
+            type: realized >= 0 ? "TRADE_PROFIT" : "TRADE_LOSS",
+            amount: Math.abs(realized),
+            balanceAfter: newBalance,
+            equityAfter: newEquity,
+            status: "SUCCESS",
+            referenceType: "TRADE",
+            referenceId: linkedTrade._id,
+            createdBy: req.user?._id || null,
+            remark:
+              realized >= 0
+                ? `Imported trade profit (${tradeDoc.positionId})`
+                : `Imported trade loss (${tradeDoc.positionId})`,
+            createdAt: new Date(tradeDoc.closeTime),
+            updatedAt: new Date(tradeDoc.closeTime),
+          });
+
+          if (commission > 0) {
+            transactionsToInsert.push({
+              user: new mongoose.Types.ObjectId(userId),
+              account: new mongoose.Types.ObjectId(accountId),
+              type: "ADJUSTMENT",
+              amount: commission,
+              balanceAfter: newBalance,
+              equityAfter: newEquity,
+              status: "SUCCESS",
+              referenceType: "ORDER",
+              referenceId: linkedTrade._id,
+              createdBy: req.user?._id || null,
+              remark: `Imported commission (${tradeDoc.positionId})`,
+              createdAt: new Date(tradeDoc.openTime),
+              updatedAt: new Date(tradeDoc.openTime),
+            });
+          }
+
+          if (swap !== 0) {
+            transactionsToInsert.push({
+              user: new mongoose.Types.ObjectId(userId),
+              account: new mongoose.Types.ObjectId(accountId),
+              type: "SWAP",
+              amount: Math.abs(swap),
+              balanceAfter: newBalance,
+              equityAfter: newEquity,
+              status: "SUCCESS",
+              referenceType: "ORDER",
+              referenceId: linkedTrade._id,
+              createdBy: req.user?._id || null,
+              remark:
+                swap > 0
+                  ? `Imported overnight swap charged (${tradeDoc.positionId})`
+                  : `Imported overnight swap credited (${tradeDoc.positionId})`,
+              createdAt: new Date(tradeDoc.closeTime),
+              updatedAt: new Date(tradeDoc.closeTime),
+            });
+          }
+        }
+
+        await Transaction.insertMany(transactionsToInsert, { ordered: true, session });
+
+        if (applyToBalance) {
+          await Account.updateOne(
+            { _id: new mongoose.Types.ObjectId(accountId) },
+            { $set: { balance: newBalance, equity: newEquity } },
+            { session }
+          );
+        }
+      });
+    } finally {
+      await session.endSession();
+    }
+
+    if (applyToBalance) {
+      try {
+        publishAccountBalance(String(accountId), newBalance, Number(account.bonus_balance || 0));
+      } catch {}
+    }
+
+    return res.json({
+      success: true,
+      message: "Position history bulk created successfully",
+      data: {
+        accountId,
+        userId,
+        insertedCount: inserted.length,
+        applyToBalance: Boolean(applyToBalance),
+        balanceAfter: Number(newBalance.toFixed(2)),
+      },
+    });
+  } catch (error) {
+    return res.status(400).json({
+      success: false,
+      message: error.message || "Failed to create position history",
     });
   }
 };

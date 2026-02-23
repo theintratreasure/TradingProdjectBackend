@@ -123,6 +123,15 @@ const computeBonusDeduction = ({
   return Math.max(0, Math.min(bal, safeRaw));
 };
 
+const parseOptionalDateTime = (value, fieldName = "dateTime") => {
+  if (value === undefined || value === null || value === "") return null;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) {
+    throw new Error(`Invalid ${fieldName}`);
+  }
+  return d;
+};
+
 /* -------------------- ADMIN: CREATE WITHDRAWAL (INSTANT) -------------------- */
 /**
  * ADMIN: CREATE WITHDRAWAL
@@ -138,7 +147,7 @@ export const adminCreateWithdrawal = async ({
   const session = await mongoose.startSession();
 
   try {
-    const { accountId, amount, method, payout } = payload;
+    const { accountId, amount, method, payout, dateTime } = payload;
 
     if (!accountId || !mongoose.isValidObjectId(accountId)) {
       return { ok: false, statusCode: 400, message: "Invalid accountId" };
@@ -156,6 +165,8 @@ export const adminCreateWithdrawal = async ({
     if (!payoutCheck.ok) {
       return { ok: false, statusCode: 400, message: payoutCheck.message };
     }
+
+    const importDateTime = parseOptionalDateTime(dateTime, "dateTime");
 
     let createdWithdrawal = null;
     let newBalanceAfter = null;
@@ -237,10 +248,13 @@ export const adminCreateWithdrawal = async ({
             },
             status: "COMPLETED",
             actionBy: adminId,
-            actionAt: new Date(),
+            actionAt: importDateTime || new Date(),
             ipAddress: ipAddress || "",
             bonus_percent: Number(bonusPercent || 0),
             bonus_deducted: Number(bonusDeduct || 0),
+            ...(importDateTime
+              ? { createdAt: importDateTime, updatedAt: importDateTime }
+              : {}),
           },
         ],
         { session },
@@ -265,6 +279,9 @@ export const adminCreateWithdrawal = async ({
             referenceId: createdWithdrawal._id,
             createdBy: adminId,
             remark: "Admin withdrawal",
+            ...(importDateTime
+              ? { createdAt: importDateTime, updatedAt: importDateTime }
+              : {}),
           },
         ],
         { session },
@@ -285,6 +302,9 @@ export const adminCreateWithdrawal = async ({
               referenceId: createdWithdrawal._id,
               createdBy: adminId,
               remark: "Bonus deducted on withdrawal",
+              ...(importDateTime
+                ? { createdAt: importDateTime, updatedAt: importDateTime }
+                : {}),
             },
           ],
           { session },

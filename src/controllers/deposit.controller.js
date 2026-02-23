@@ -190,13 +190,14 @@ export async function adminEditDepositAmount(req, res) {
 /* ADMIN: CREATE DEPOSIT */
 export async function adminCreateDeposit(req, res) {
   try {
-    const { accountId, amount, method } = req.body;
+    const { accountId, amount, method, dateTime } = req.body;
     const proof = req.body?.proof;
 
     const deposit = await adminCreateDepositService({
       accountId,
       amount,
       method,
+      dateTime,
       proof,
       adminId: req.user._id,
       ipAddress: req.ip

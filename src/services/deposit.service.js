@@ -23,6 +23,15 @@ const DEPOSIT_METHODS = new Set([
 
 const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+function parseOptionalDateTime(value, fieldName = "dateTime") {
+  if (value === undefined || value === null || value === "") return null;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) {
+    throw new Error(`Invalid ${fieldName}`);
+  }
+  return d;
+}
+
 async function normalizeDepositMethod(rawMethod) {
   if (!rawMethod) return null;
 
@@ -745,6 +754,7 @@ export async function adminCreateDepositService({
   proof,
   adminId,
   ipAddress,
+  dateTime,
 }) {
   if (!accountId || !amount || !method) {
     throw new Error("All fields are required");
@@ -764,6 +774,7 @@ export async function adminCreateDepositService({
   const safeProof = proof && typeof proof === "object"
     ? proof
     : { image_url: "", image_public_id: "" };
+  const importDateTime = parseOptionalDateTime(dateTime, "dateTime");
 
   const session = await mongoose.startSession();
   let createdDeposit = null;
@@ -808,8 +819,11 @@ export async function adminCreateDepositService({
             bonus_amount: Number(bonusAmount || 0),
             status: "APPROVED",
             actionBy: adminId,
-            actionAt: new Date(),
+            actionAt: importDateTime || new Date(),
             ipAddress,
+            ...(importDateTime
+              ? { createdAt: importDateTime, updatedAt: importDateTime }
+              : {}),
           },
         ],
         { session },
@@ -854,6 +868,9 @@ export async function adminCreateDepositService({
             referenceId: createdDeposit[0]._id,
             createdBy: adminId,
             remark: "Admin deposit",
+            ...(importDateTime
+              ? { createdAt: importDateTime, updatedAt: importDateTime }
+              : {}),
           },
         ],
         { session },
@@ -874,6 +891,9 @@ export async function adminCreateDepositService({
               referenceId: createdDeposit[0]._id,
               createdBy: adminId,
               remark: "Deposit bonus credited",
+              ...(importDateTime
+                ? { createdAt: importDateTime, updatedAt: importDateTime }
+                : {}),
             },
           ],
           { session },

@@ -2,6 +2,7 @@ import { Router } from "express";
 
 // Import all admin trade controllers
 import {
+  adminBulkCreatePositionHistory,
   adminCancelPendingOrder,
   adminClosePosition,
   adminListBrokerage,
@@ -99,6 +100,7 @@ router.patch("/trade/position/modify", authMiddleware, adminAuth, adminModifyPos
 // Close open position
 // POST /api/v1/trade-admin/trade/position/close
 router.post("/trade/position/close", authMiddleware, adminAuth, adminClosePosition);
+router.post("/history/positions/bulk", authMiddleware, adminAuth, adminBulkCreatePositionHistory);
 
 // Export router
 export default router;

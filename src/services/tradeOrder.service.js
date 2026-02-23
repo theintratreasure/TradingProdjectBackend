@@ -285,46 +285,158 @@ export async function getDealsService({
     match.openTime = openTimeFilter;
   }
 
+  const transactionMatch = {
+    account: accountObjectId,
+    status: "SUCCESS",
+  };
+
+  if (openTimeFilter) {
+    transactionMatch.createdAt = openTimeFilter;
+  }
+
   /* =========================
      FETCH TRADES
   ========================== */
-  const trades = await Trade.find(match)
-    .sort({ openTime: -1 })
-    .lean();
+  const [trades, transactions] = await Promise.all([
+    Trade.find(match).sort({ openTime: -1 }).lean(),
+    Transaction.find(transactionMatch)
+      .select({
+        type: 1,
+        amount: 1,
+        balanceAfter: 1,
+        referenceId: 1,
+        remark: 1,
+        createdAt: 1,
+      })
+      .sort({ createdAt: -1 })
+      .lean(),
+  ]);
 
   /* =========================
      BUILD MT5 DEALS (IN + OUT)
   ========================== */
   const deals = [];
+  let totalTradingProfit = 0;
+  let totalDepositCredit = 0;
+  let totalBalanceDebit = 0;
+  let totalSwapAmount = 0;
 
   for (const t of trades) {
     // ---------- IN DEAL ----------
     deals.push({
+      time: t.openTime,
+      deal: `${t.positionId}-IN`,
+      order: t.positionId,
       tradeId: t.positionId,
       symbol: t.symbol,
       type: t.side === "BUY" ? "BUY_IN" : "SELL_IN",
+      direction: "in",
       volume: t.volume,
       price: t.openPrice,
       date: t.openTime,
       swap: 0,
-      commission: 0,
+      commission: t.commission || 0,
+      fee: 0,
       pnl: 0,
+      profit: 0,
+      balance: null,
+      comment: "",
     });
 
     // ---------- OUT DEAL ----------
     if (t.status === "CLOSED" && t.closeTime) {
+      const closeProfit = Number(t.realizedPnL) || 0;
+      totalTradingProfit += closeProfit;
+      totalSwapAmount += Number(t.swap) || 0;
+
       deals.push({
+        time: t.closeTime,
+        deal: `${t.positionId}-OUT`,
+        order: t.positionId,
         tradeId: t.positionId,
         symbol: t.symbol,
         type: t.side === "BUY" ? "SELL_OUT" : "BUY_OUT",
+        direction: "out",
         volume: t.volume,
         price: t.closePrice,
         date: t.closeTime,
         swap: t.swap || 0,
         commission: t.commission || 0,
-        pnl: t.realizedPnL || 0,
+        fee: 0,
+        pnl: closeProfit,
+        profit: closeProfit,
+        balance: null,
+        comment: "",
       });
     }
+  }
+
+  for (const tx of transactions) {
+    const txType = String(tx.type || "").toUpperCase();
+    const amount = Number(tx.amount) || 0;
+
+    if (txType === "TRADE_PROFIT" || txType === "TRADE_LOSS") {
+      continue;
+    }
+
+    let profit = 0;
+    let swap = 0;
+    let comment = String(tx.remark || "").trim();
+
+    if (
+      txType === "DEPOSIT" ||
+      txType === "INTERNAL_TRANSFER_IN" ||
+      txType === "BONUS" ||
+      txType === "BONUS_CREDIT_IN" ||
+      txType === "REFERRAL" ||
+      txType === "ADJUSTMENT"
+    ) {
+      profit = amount;
+      totalDepositCredit += amount;
+      if (!comment) comment = "Balance credit";
+    } else if (
+      txType === "WITHDRAWAL" ||
+      txType === "INTERNAL_TRANSFER_OUT" ||
+      txType === "BONUS_CREDIT_OUT"
+    ) {
+      profit = -amount;
+      totalBalanceDebit += amount;
+      if (!comment) comment = "Balance debit";
+    } else if (txType === "SWAP") {
+      const charged = /charged/i.test(comment);
+      const credited = /credited/i.test(comment);
+      if (charged) {
+        swap = -amount;
+      } else if (credited) {
+        swap = amount;
+      } else {
+        swap = -amount;
+      }
+      totalSwapAmount += swap;
+      if (!comment) comment = "Swap";
+    } else {
+      profit = amount;
+    }
+
+    deals.push({
+      time: tx.createdAt,
+      deal: String(tx._id),
+      order: tx.referenceId ? String(tx.referenceId) : null,
+      tradeId: tx.referenceId ? String(tx.referenceId) : String(tx._id),
+      symbol: "",
+      type: "BALANCE",
+      direction: "",
+      volume: 0,
+      price: 0,
+      date: tx.createdAt,
+      swap,
+      commission: 0,
+      fee: 0,
+      pnl: profit,
+      profit,
+      balance: Number(tx.balanceAfter) || 0,
+      comment,
+    });
   }
 
   /* =========================
@@ -340,7 +452,12 @@ export async function getDealsService({
   const paginatedDeals = deals.slice(start, start + limit);
 
   return {
-    summary: {}, // intentionally empty (as requested)
+    summary: {
+      totalTradingProfit: Number(totalTradingProfit.toFixed(2)),
+      totalDepositCredit: Number(totalDepositCredit.toFixed(2)),
+      totalBalanceDebit: Number(totalBalanceDebit.toFixed(2)),
+      totalSwap: Number(totalSwapAmount.toFixed(2)),
+    },
     deals: paginatedDeals,
     pagination: {
       page,
