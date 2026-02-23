@@ -48,7 +48,8 @@ export async function adminSignup(req, res) {
 
     const data = await adminSignupService({
       ...req.body,
-      signup_ip: ip
+      signup_ip: ip,
+      actorId: req.user?._id || null
     });
 
     return res.status(201).json({
@@ -238,7 +239,11 @@ export async function adminChangeUserPassword(req, res) {
     const { userId } = req.params;
     const { newPassword } = req.body;
 
-    const data = await adminChangeUserPasswordService(userId, newPassword);
+    const data = await adminChangeUserPasswordService(
+      userId,
+      newPassword,
+      req.user?._id || null
+    );
 
     return res.json({
       success: true,

@@ -11,6 +11,11 @@ import UserDevice from '../models/UserDevice.model.js';
 import admin from '../config/firebase.js';
 import UserProfile from '../models/UserProfile.model.js';
 import mongoose from 'mongoose';
+import {
+  ACTIVITY_ACTIONS,
+  ACTOR_TYPES,
+  recordActivity
+} from './activity.service.js';
 
 // ✅ ADD THESE IMPORTS
 import AccountPlan from '../models/AccountPlan.model.js';
@@ -121,6 +126,15 @@ export async function signupService({
       `${process.env.FRONTEND_URL}/verify-email?token=${token}`
     ).catch(err => {
       console.error('EMAIL SEND ERROR:', err);
+    });
+
+    recordActivity({
+      userId: user._id,
+      action: ACTIVITY_ACTIONS.USER_CREATED,
+      actorId: user._id,
+      actorType: ACTOR_TYPES.SELF
+    }).catch(err => {
+      console.error('ACTIVITY_LOG_ERROR:', err);
     });
 
     return {
@@ -364,6 +378,15 @@ export async function resetPasswordService(token, newPassword) {
       }
     }
   );
+
+  recordActivity({
+    userId: auth.user_id,
+    action: ACTIVITY_ACTIONS.PASSWORD_RESET,
+    actorId: auth.user_id,
+    actorType: ACTOR_TYPES.SELF
+  }).catch(err => {
+    console.error('ACTIVITY_LOG_ERROR:', err);
+  });
 }
 
 /* ======================================================
@@ -481,7 +504,8 @@ export async function adminSignupService({
   signup_ip,
   isMailVerified = true,
   kycStatus,
-  profile = {}
+  profile = {},
+  actorId = null
 }) {
   if (!email || typeof email !== 'string') {
     throw new Error('Email is required');
@@ -591,6 +615,15 @@ export async function adminSignupService({
       });
     }
 
+    recordActivity({
+      userId: user._id,
+      action: ACTIVITY_ACTIONS.USER_CREATED,
+      actorId: actorId || null,
+      actorType: actorId ? ACTOR_TYPES.ADMIN : ACTOR_TYPES.SYSTEM
+    }).catch(err => {
+      console.error('ACTIVITY_LOG_ERROR:', err);
+    });
+
     return {
       user_id: user._id,
       message: mailVerified
@@ -616,7 +649,11 @@ export async function adminSignupService({
 }
 
 /* ================= ADMIN CHANGE USER PASSWORD ================= */
-export async function adminChangeUserPasswordService(userId, newPassword) {
+export async function adminChangeUserPasswordService(
+  userId,
+  newPassword,
+  actorId = null
+) {
   if (!mongoose.isValidObjectId(userId)) {
     throw new Error('Invalid userId');
   }
@@ -650,6 +687,15 @@ export async function adminChangeUserPasswordService(userId, newPassword) {
   if (result.matchedCount === 0) {
     throw new Error('Auth record not found');
   }
+
+  recordActivity({
+    userId,
+    action: ACTIVITY_ACTIONS.PASSWORD_CHANGED_BY_ADMIN,
+    actorId: actorId || null,
+    actorType: actorId ? ACTOR_TYPES.ADMIN : ACTOR_TYPES.SYSTEM
+  }).catch(err => {
+    console.error('ACTIVITY_LOG_ERROR:', err);
+  });
 
   return { userId };
 }
@@ -701,6 +747,15 @@ export async function changeMyPasswordService(userId, oldPassword, newPassword) 
       }
     }
   );
+
+  recordActivity({
+    userId,
+    action: ACTIVITY_ACTIONS.PASSWORD_CHANGED,
+    actorId: userId,
+    actorType: ACTOR_TYPES.SELF
+  }).catch(err => {
+    console.error('ACTIVITY_LOG_ERROR:', err);
+  });
 
   return { userId };
 }

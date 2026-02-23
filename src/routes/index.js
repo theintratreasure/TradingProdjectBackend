@@ -25,6 +25,7 @@ import deviceRoutes from "./v1/device.routes.js";
 import conversionRoutes from "./v1/conversion.routes.js";
 import referralRoutes from "./v1/referral.routes.js";
 import bonusRoutes from "./v1/bonus.routes.js";
+import activityRoutes from "./v1/activity.routes.js";
 const router = Router();
 
 
@@ -54,5 +55,6 @@ router.use("/v1/device", deviceRoutes);
 router.use("/v1/conversion", conversionRoutes);
 router.use("/v1/referrals", referralRoutes);
 router.use("/v1/bonus", bonusRoutes);
+router.use("/v1/activity", activityRoutes);
 
 export default router;

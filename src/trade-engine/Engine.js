@@ -1201,25 +1201,28 @@ export class Engine {
           console.error("[ENGINE] emit LIVE_POSITION failed", err);
         }
 
-        /* === STOP LOSS === */
+        // Do not close positions via SL/TP when the market is closed.
+        if (isMarketOpen) {
+          /* === STOP LOSS === */
 
-        if (
-          pos.stopLoss !== null &&
-          ((pos.side === "BUY" && currentPrice <= pos.stopLoss) ||
-            (pos.side === "SELL" && currentPrice >= pos.stopLoss))
-        ) {
-          this.closePositionInternal(account, pos, "STOP_LOSS", sym);
-          continue;
-        }
+          if (
+            pos.stopLoss !== null &&
+            ((pos.side === "BUY" && currentPrice <= pos.stopLoss) ||
+              (pos.side === "SELL" && currentPrice >= pos.stopLoss))
+          ) {
+            this.closePositionInternal(account, pos, "STOP_LOSS", sym);
+            continue;
+          }
 
-        /* === TAKE PROFIT === */
+          /* === TAKE PROFIT === */
 
-        if (
-          pos.takeProfit !== null &&
-          ((pos.side === "BUY" && currentPrice >= pos.takeProfit) ||
-            (pos.side === "SELL" && currentPrice <= pos.takeProfit))
-        ) {
-          this.closePositionInternal(account, pos, "TAKE_PROFIT", sym);
+          if (
+            pos.takeProfit !== null &&
+            ((pos.side === "BUY" && currentPrice >= pos.takeProfit) ||
+              (pos.side === "SELL" && currentPrice <= pos.takeProfit))
+          ) {
+            this.closePositionInternal(account, pos, "TAKE_PROFIT", sym);
+          }
         }
       }
 
@@ -1260,10 +1263,13 @@ export class Engine {
          RISK MANAGEMENT
       ====================== */
 
-      await RiskManager.checkWarning(account);
+      // Prevent risk-driven closures (stopout) while the market is closed for this symbol.
+      if (isMarketOpen) {
+        await RiskManager.checkWarning(account);
 
-      if (RiskManager.shouldStopOut(account)) {
-        this.forceCloseAll(account);
+        if (RiskManager.shouldStopOut(account)) {
+          this.forceCloseAll(account);
+        }
       }
     }
   }
@@ -1400,6 +1406,16 @@ export class Engine {
     if (!pos) throw new Error("Position not found");
 
     const sym = this.symbols.get(pos.symbol);
+
+    if (!sym) throw new Error("Symbol not loaded");
+
+    const status = this.getMarketStatusForSymbol(pos.symbol);
+    if (!status) {
+      throw new Error("Market status unavailable, please try again");
+    }
+    if (status.isMarketOpen !== true) {
+      throw new Error("Market is closed");
+    }
 
     this.closePositionInternal(account, pos, reason, sym);
 

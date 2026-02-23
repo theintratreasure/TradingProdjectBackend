@@ -36,6 +36,12 @@ export async function broadcastNotification({ title, message, data, expireAt }) 
   }
 
   // 3. Send to Firebase (multicast)
+  const payloadData = {
+    title: title,
+    body: message,
+    ...(data || {})
+  };
+
   const response = await admin.messaging().sendEachForMulticast({
     tokens,
 
@@ -44,12 +50,7 @@ export async function broadcastNotification({ title, message, data, expireAt }) 
       body: message
     },
 
-    data: {
-      title: title,
-      body: message,
-      notificationId: String(notification._id),
-      ...(data || {})
-    },
+    data: payloadData,
 
     android: {
       priority: "high",
