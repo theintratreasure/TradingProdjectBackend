@@ -510,6 +510,22 @@ export async function getTradeSummaryService({ accountId, from, to }) {
           },
         },
 
+        /* -------- WITHDRAW -------- */
+        totalWithdraw: {
+          $sum: {
+            $cond: [
+              {
+                $in: [
+                  "$type",
+                  ["WITHDRAWAL", "INTERNAL_TRANSFER_OUT"],
+                ],
+              },
+              "$amount",
+              0,
+            ],
+          },
+        },
+
         /* -------- NET TRADING PNL -------- */
         totalPnL: {
           $sum: {
@@ -571,6 +587,7 @@ export async function getTradeSummaryService({ accountId, from, to }) {
 
   const totals = aggResult[0] || {
     totalDeposit: 0,
+    totalWithdraw: 0,
     totalPnL: 0,
     totalCommission: 0,
     totalSwap: 0,
@@ -578,6 +595,7 @@ export async function getTradeSummaryService({ accountId, from, to }) {
 
   return {
     totalDeposit: Number(totals.totalDeposit.toFixed(2)),
+    totalWithdraw: Number(totals.totalWithdraw.toFixed(2)),
     totalPnL: Number(totals.totalPnL.toFixed(2)),
     totalCommission: Number(totals.totalCommission.toFixed(2)),
     totalSwap: Number(totals.totalSwap.toFixed(2)),
