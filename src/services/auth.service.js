@@ -505,7 +505,8 @@ export async function adminSignupService({
   isMailVerified = true,
   kycStatus,
   profile = {},
-  actorId = null
+  actorId = null,
+  userType
 }) {
   if (!email || typeof email !== 'string') {
     throw new Error('Email is required');
@@ -551,6 +552,14 @@ export async function adminSignupService({
     throw new Error('Invalid kycStatus');
   }
 
+  const safeUserTypeRaw =
+    typeof userType === 'string' ? userType.trim().toUpperCase() : undefined;
+
+  if (safeUserTypeRaw && safeUserTypeRaw !== 'USER') {
+    throw new Error('Only USER can be created via this endpoint');
+  }
+
+  const finalUserType = 'USER';
   const mailVerified = Boolean(isMailVerified);
 
   let user = null;
@@ -562,7 +571,7 @@ export async function adminSignupService({
       phone: safePhone,
       name: safeName,
       signup_ip,
-      userType: 'ADMIN',
+      userType: finalUserType,
       isMailVerified: mailVerified,
       ...(safeKycStatus ? { kycStatus: safeKycStatus } : {})
     });
@@ -627,8 +636,8 @@ export async function adminSignupService({
     return {
       user_id: user._id,
       message: mailVerified
-        ? 'Admin signup successful'
-        : 'Admin signup successful, confirmation email sent'
+        ? 'User signup successful'
+        : 'User signup successful, confirmation email sent'
     };
   } catch (err) {
     if (user?._id) {

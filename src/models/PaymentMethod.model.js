@@ -19,6 +19,7 @@ const paymentMethodSchema = new mongoose.Schema(
     account_name: String,
     account_number: String,
     ifsc: String,
+    swift_code: String,
 
     // UPI
     upi_id: String,

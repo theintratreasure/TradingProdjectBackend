@@ -52,6 +52,10 @@ export async function createPaymentMethodService(userId, body) {
     payload.account_name = body.account_name;
     payload.account_number = body.account_number;
     payload.ifsc = body.ifsc;
+
+    if (body.swift_code) {
+      payload.swift_code = String(body.swift_code).trim();
+    }
   }
 
   if (type === 'UPI') {
