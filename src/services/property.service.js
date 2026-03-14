@@ -1,6 +1,7 @@
 import Instrument from "../models/Instrument.model.js";
 import Account from "../models/Account.model.js";
 import { MarketSchedule } from "../models/MarketSchedule.model.js";
+import { findInstrumentByAnySymbol } from "./instrumentProvider.service.js";
 
 const getMarketScheduleBySegment = async (segmentRaw) => {
   const segment = String(segmentRaw || "").trim().toLowerCase();
@@ -21,7 +22,7 @@ const getMarketScheduleBySegment = async (segmentRaw) => {
 };
 
 export const getPropertyBySymbolService = async (symbolRaw, accountId) => {
-  const symbol = String(symbolRaw || "").trim().toUpperCase();
+  const symbol = String(symbolRaw || "").trim();
 
   if (!symbol) {
     throw new Error("symbol is required");
@@ -31,10 +32,14 @@ export const getPropertyBySymbolService = async (symbolRaw, accountId) => {
     throw new Error("accountId is required");
   }
 
-  const [instrument, account] = await Promise.all([
-    Instrument.findOne({ code: symbol }).select("-_id").lean(),
+  const [instrumentMatch, account] = await Promise.all([
+    findInstrumentByAnySymbol(symbol),
     Account.findById(accountId).select("swap_enabled swap_charge").lean()
   ]);
+
+  const instrument = instrumentMatch
+    ? await Instrument.findOne({ code: instrumentMatch.code }).select("-_id").lean()
+    : null;
 
   if (!instrument) {
     throw new Error("Instrument not found");

@@ -12,6 +12,10 @@ import { v4 as uuidv4 } from "uuid";
 import dotenv from "dotenv";
 import Redis from "ioredis";
 import { HighLowService } from "../services/highlow.service.js";
+import {
+  normalizeProviderCode,
+  resolveInstrumentProviderCode,
+} from "../services/instrumentProvider.service.js";
 import { tradeEngine } from "../trade-engine/bootstrap.js";
 import EngineSync from "../trade-engine/EngineSync.js";
 import { engineEvents } from "../trade-engine/EngineEvents.js";
@@ -176,12 +180,14 @@ class AlltickWS extends EventEmitter {
 
     this.client = null;
     this.subscriptions = new Map();
+    this.pendingSubscriptions = new Map();
     this.connected = false;
 
     this.heartbeatTimer = null;
     this.reconnectTimer = null;
     this.seqId = 1;
     this.pushTimer = null;
+    this.lastPushPending = [];
 
     this.isConnecting = false;
     this.reconnectAttempts = 0;
@@ -236,7 +242,28 @@ class AlltickWS extends EventEmitter {
 
         // heartbeat/data/subscribed handling based on provider cmd_id
         if (json.cmd_id === 22003) {
-          this.emit("subscribed", json);
+          const pending = this.lastPushPending;
+          if (json.ret === 200) {
+            for (const sub of pending) {
+              this.pendingSubscriptions.delete(sub.symbol);
+            }
+            this.emit("subscribed", {
+              ack: json,
+              subscriptions: pending,
+            });
+          } else {
+            const providerMsg = String(json.msg || "").toLowerCase();
+            if (providerMsg.includes("code invalid")) {
+              for (const sub of pending) {
+                this.pendingSubscriptions.delete(sub.symbol);
+                this.subscriptions.delete(sub.symbol);
+              }
+            }
+            this.emit("subscribe_error", {
+              ack: json,
+              subscriptions: pending,
+            });
+          }
           return;
         }
 
@@ -347,12 +374,15 @@ class AlltickWS extends EventEmitter {
   }
 
   subscribe(codeRaw, levelRaw = 5) {
-    const code = normalizeSymbol(codeRaw);
+    const symbol = normalizeSymbol(codeRaw);
+    const providerCode = normalizeProviderCode(codeRaw);
     const depth = Number(levelRaw) || 5;
 
-    if (!code) return;
+    if (!symbol || !providerCode) return;
 
-    this.subscriptions.set(code, depth);
+    const record = { symbol, providerCode, depth };
+    this.subscriptions.set(symbol, record);
+    this.pendingSubscriptions.set(symbol, record);
     this.schedulePushSubscription();
   }
 
@@ -366,9 +396,17 @@ class AlltickWS extends EventEmitter {
     if (this.subscriptions.size === 0) return;
 
     const symbolList = [];
-    for (const [code, depth] of this.subscriptions.entries()) {
-      symbolList.push({ code, depth_level: depth });
+    for (const { providerCode, depth } of this.subscriptions.values()) {
+      symbolList.push({ code: providerCode, depth_level: depth });
     }
+
+    this.lastPushPending = Array.from(this.pendingSubscriptions.values()).map(
+      ({ symbol, providerCode, depth }) => ({
+        symbol,
+        providerCode,
+        depth,
+      }),
+    );
 
     const payload = {
       cmd_id: 22002,
@@ -386,6 +424,7 @@ class AlltickWS extends EventEmitter {
 
   restoreSubscriptions() {
     if (this.subscriptions.size > 0) {
+      this.pendingSubscriptions = new Map(this.subscriptions);
       this.pushSubscription();
     }
   }
@@ -400,6 +439,62 @@ export const wsStock = new AlltickWS(STOCK_URL, "stock");
 // start connections (singletons)
 wsCrypto.connect();
 wsStock.connect();
+
+function notifyUpstreamSubscribeFailure(market, subscriptions, ack) {
+  if (!Array.isArray(subscriptions) || subscriptions.length === 0) return;
+
+  for (const sub of subscriptions) {
+    const key = makeKey(market, sub.symbol);
+
+    for (const [clientId, subs] of clientSubscriptions.entries()) {
+      if (!subs || !subs.has(key)) continue;
+
+      const ws = wsClients.get(clientId);
+      if (!ws || ws.readyState !== WebSocket.OPEN) continue;
+
+      try {
+        ws.send(
+          JSON.stringify({
+            status: "error",
+            error: "upstream subscribe failed",
+            symbol: sub.symbol,
+            providerSymbol: sub.providerCode,
+            market,
+            providerRet: ack?.ret ?? null,
+            providerMsg: ack?.msg ?? null,
+          }),
+        );
+      } catch (err) {
+        ERROR(
+          "[WS SEND ERROR] upstream subscribe failed ->",
+          err && err.message ? err.message : err,
+        );
+      }
+    }
+  }
+}
+
+function attachSubscriptionLogs(manager) {
+  manager.on("subscribed", ({ ack, subscriptions }) => {
+    INFO(`[${manager.marketName}] subscribe ok`, {
+      providerRet: ack?.ret ?? null,
+      providerMsg: ack?.msg ?? null,
+      symbols: subscriptions.map((sub) => sub.providerCode),
+    });
+  });
+
+  manager.on("subscribe_error", ({ ack, subscriptions }) => {
+    WARN(`[${manager.marketName}] subscribe failed`, {
+      providerRet: ack?.ret ?? null,
+      providerMsg: ack?.msg ?? null,
+      symbols: subscriptions.map((sub) => sub.providerCode),
+    });
+    notifyUpstreamSubscribeFailure(manager.marketName, subscriptions, ack);
+  });
+}
+
+attachSubscriptionLogs(wsCrypto);
+attachSubscriptionLogs(wsStock);
 
 // ========================
 // CLIENT REGISTRY + INDEXES
@@ -886,8 +981,9 @@ export async function handleClientMessage(clientWs, msg) {
     if (data.type === "subscribe") {
       const market = normalizeMarket(data.market);
       const symbol = normalizeSymbol(data.symbol);
+      const providerSymbol = await resolveInstrumentProviderCode(data.symbol);
 
-      if (!market || !symbol) {
+      if (!market || !symbol || !providerSymbol) {
         try {
           clientWs.send(JSON.stringify({ status: "error", error: "invalid market or symbol" }));
         } catch {}
@@ -923,13 +1019,13 @@ export async function handleClientMessage(clientWs, msg) {
       const key = makeKey(market, symbol);
       subs.add(key);
 
-      if (market === "crypto") wsCrypto.subscribe(symbol);
-      if (market === "stock") wsStock.subscribe(symbol);
+      if (market === "crypto") wsCrypto.subscribe(providerSymbol);
+      if (market === "stock") wsStock.subscribe(providerSymbol);
 
       // fetch day high/low (best-effort)
       let hl = null;
       try {
-        hl = await HighLowService.getDayHighLow(market, symbol);
+        hl = await HighLowService.getDayHighLow(market, providerSymbol);
       } catch (err) {
         DBG("HighLowService failed", err && err.message ? err.message : err);
       }
@@ -939,6 +1035,7 @@ export async function handleClientMessage(clientWs, msg) {
           JSON.stringify({
             status: "subscribed",
             symbol,
+            providerSymbol,
             accountId: clientWs.accountId || null,
             dayOpen: hl?.data?.open ?? null,
             dayHigh: hl?.data?.high ?? null,

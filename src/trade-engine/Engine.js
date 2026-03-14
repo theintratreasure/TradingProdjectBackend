@@ -1288,6 +1288,7 @@ export class Engine {
     }
 
     pos.updatePnL(formatted.bid, formatted.ask, sym?.contractSize);
+    const capitalExhaustedBeforeClose = RiskManager.capitalExhausted(account);
 
     account.positions.delete(pos.positionId);
 
@@ -1307,6 +1308,15 @@ export class Engine {
           );
         }
       }
+    }
+
+    if (
+      (capitalExhaustedBeforeClose || account.balance <= 0) &&
+      Number(account.bonus_balance || 0) > 0
+    ) {
+      const remainingBonus = Number(account.bonus_balance || 0);
+      bonusDeduct = Number((bonusDeduct + remainingBonus).toFixed(8));
+      account.bonus_balance = 0;
     }
 
     // recalc after balance change

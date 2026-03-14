@@ -8,6 +8,7 @@ const InstrumentSchema = new mongoose.Schema(
     code: {
       type: String,
       required: true,
+      trim: true,
       uppercase: true,
       unique: true,
       index: true
@@ -19,9 +20,17 @@ const InstrumentSchema = new mongoose.Schema(
       trim: true
     },
 
+    providerCode: {
+      type: String,
+      trim: true,
+      default: null,
+      index: true
+    },
+
     segment: {
       type: String,
       required: true,
+      trim: true,
       uppercase: true,
       index: true
     },

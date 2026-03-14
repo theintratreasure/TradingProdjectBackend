@@ -17,6 +17,23 @@ export class RiskManager {
     return (account.equity / account.usedMargin) * 100;
   }
 
+  static cashEquity(account) {
+    const direct = Number(account?.cashEquity);
+    if (Number.isFinite(direct)) return direct;
+
+    const equity = Number(account?.equity);
+    const bonusLive = Number(account?.bonus_live);
+    if (Number.isFinite(equity) && Number.isFinite(bonusLive)) {
+      return equity - bonusLive;
+    }
+
+    return Number(account?.balance) || 0;
+  }
+
+  static capitalExhausted(account) {
+    return this.cashEquity(account) <= 0;
+  }
+
   // ===============================
   // LOSS %
   // ===============================
@@ -70,6 +87,9 @@ export class RiskManager {
   // 90% STOPOUT
   // ===============================
   static shouldStopOut(account) {
+    if (this.capitalExhausted(account)) {
+      return true;
+    }
 
     const loss = this.lossPercent(account);
 

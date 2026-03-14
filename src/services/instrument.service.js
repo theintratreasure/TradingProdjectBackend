@@ -2,6 +2,10 @@ import redis from '../config/redis.js';
 import Instrument from '../models/Instrument.model.js';
 import EngineSync from '../trade-engine/EngineSync.js';
 import { publishSymbolRemove, publishSymbolUpsert } from '../trade-engine/EngineSyncBus.js';
+import {
+  invalidateInstrumentProviderCache,
+  normalizeProviderCode,
+} from './instrumentProvider.service.js';
 
 const LIST_TTL = 300;
 const COUNT_TTL = 300;
@@ -11,10 +15,23 @@ const LIST_KEY = 'instruments:list';
 const COUNT_KEY = 'instruments:count';
 const SPREAD_MODES = new Set(['ADD_ON', 'FIXED']);
 
+const normalizeInstrumentCode = (value) =>
+  String(value || '').trim().toUpperCase();
+
+const normalizeInstrumentSegment = (value) =>
+  String(value || '').trim().toUpperCase();
+
+const resolveProviderCodeInput = (providerCode, fallbackCode) => {
+  const direct = normalizeProviderCode(providerCode);
+  if (direct) return direct;
+  return normalizeProviderCode(fallbackCode) || null;
+};
+
 
 export const createInstrumentService = async (payload) => {
   const {
     code,
+    providerCode,
     name,
     segment,
     lotSize,
@@ -33,10 +50,15 @@ export const createInstrumentService = async (payload) => {
     isTradeable
   } = payload;
 
+  const normalizedCode = normalizeInstrumentCode(code);
+  const normalizedProviderCode = resolveProviderCodeInput(providerCode, code);
+  const normalizedName = String(name || '').trim();
+  const normalizedSegment = normalizeInstrumentSegment(segment);
+
   /* =========================
      REQUIRED VALIDATION
   ========================== */
-  if (!code || !name || !segment) {
+  if (!normalizedCode || !normalizedName || !normalizedSegment) {
     throw new Error('code, name and segment are required');
   }
 
@@ -64,7 +86,7 @@ export const createInstrumentService = async (payload) => {
      DUPLICATE CHECK (FAST)
   ========================== */
   const alreadyExists = await Instrument.exists({
-    code: code.toUpperCase()
+    code: normalizedCode
   });
 
   if (alreadyExists) {
@@ -75,9 +97,10 @@ export const createInstrumentService = async (payload) => {
      CREATE INSTRUMENT
   ========================== */
   const instrument = await Instrument.create({
-    code: code.toUpperCase(),
-    name,
-    segment: segment.toUpperCase(),
+    code: normalizedCode,
+    providerCode: normalizedProviderCode,
+    name: normalizedName,
+    segment: normalizedSegment,
     lotSize,
     minQty,
     maxQty,
@@ -98,6 +121,7 @@ export const createInstrumentService = async (payload) => {
   if (keys.length) await redis.del(keys);
 
   await redis.incr(VERSION_KEY);
+  invalidateInstrumentProviderCache(instrument.code, instrument.providerCode);
 
   // Sync symbol into trade engine (RAM)
   EngineSync.loadSymbolFromInstrument(instrument);
@@ -205,9 +229,40 @@ export const updateInstrumentService = async (id, payload) => {
   /* =========================
      DUPLICATE CODE CHECK
   ========================== */
-  if (payload.code && payload.code !== existing.code) {
+  let nextCode = existing.code;
+  if (payload.code !== undefined) {
+    nextCode = normalizeInstrumentCode(payload.code);
+    if (!nextCode) {
+      throw new Error('code is required');
+    }
+  }
+
+  let nextSegment = existing.segment;
+  if (payload.segment !== undefined) {
+    nextSegment = normalizeInstrumentSegment(payload.segment);
+    if (!nextSegment) {
+      throw new Error('segment is required');
+    }
+  }
+
+  const currentProviderCode = resolveProviderCodeInput(
+    existing.providerCode,
+    existing.code
+  );
+
+  let nextProviderCode = currentProviderCode;
+  if (payload.providerCode !== undefined) {
+    nextProviderCode = resolveProviderCodeInput(payload.providerCode, payload.code);
+  } else if (
+    payload.code !== undefined &&
+    (!existing.providerCode || currentProviderCode === existing.code)
+  ) {
+    nextProviderCode = resolveProviderCodeInput(payload.code, payload.code);
+  }
+
+  if (nextCode !== existing.code) {
     const alreadyExists = await Instrument.exists({
-      code: payload.code.toUpperCase(),
+      code: nextCode,
       _id: { $ne: id }
     });
 
@@ -244,13 +299,10 @@ export const updateInstrumentService = async (id, payload) => {
       $set: {
         ...payload,
 
-        code: payload.code
-          ? payload.code.toUpperCase()
-          : existing.code,
+        code: nextCode,
+        providerCode: nextProviderCode,
 
-        segment: payload.segment
-          ? payload.segment.toUpperCase()
-          : existing.segment
+        segment: nextSegment
       }
     },
     { new: true, runValidators: true }
@@ -258,6 +310,12 @@ export const updateInstrumentService = async (id, payload) => {
 
   // Cache invalidate
   await redis.incr(VERSION_KEY);
+  invalidateInstrumentProviderCache(
+    existing.code,
+    existing.providerCode,
+    nextCode,
+    nextProviderCode
+  );
 
   // Sync symbol into trade engine (RAM)
   EngineSync.loadSymbolFromInstrument(updated);
@@ -285,6 +343,7 @@ export const deleteInstrumentService = async (id) => {
 
   // Cache invalidate
   await redis.incr(VERSION_KEY);
+  invalidateInstrumentProviderCache(instrument.code, instrument.providerCode);
 
   // Remove symbol from trade engine (RAM)
   EngineSync.removeInstrumentByCode(instrument.code);

@@ -173,6 +173,7 @@ class LedgerQueue {
     realizedPnL,
     reason,
     bonusDeduct,
+    bonusBalance,
     bonusPercent,
   }) {
     const pnl = Number(realizedPnL);
@@ -235,8 +236,10 @@ class LedgerQueue {
     }
 
     const currentBonus = Number(account.bonus_balance || 0);
-    const newBonusBalance =
-      bonusDeductValue > 0
+    const requestedBonusBalance = Number(bonusBalance);
+    const newBonusBalance = Number.isFinite(requestedBonusBalance)
+      ? Math.max(0, requestedBonusBalance)
+      : bonusDeductValue > 0
         ? Math.max(0, currentBonus - bonusDeductValue)
         : currentBonus;
     const newEquity = Number(newBalance) + Number(newBonusBalance);

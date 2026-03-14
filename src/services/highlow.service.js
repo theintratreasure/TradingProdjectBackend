@@ -1,6 +1,10 @@
 // src/services/highlow.service.js
 import crypto from "crypto";
 import dotenv from "dotenv";
+import {
+  normalizeProviderCode,
+  resolveInstrumentProviderCode,
+} from "./instrumentProvider.service.js";
 
 dotenv.config();
 
@@ -14,10 +18,9 @@ const REST_STOCK_BASE = String(process.env.ALLTICK_STOCK_REST_URL || "").trim();
 import redis, { isRedisReady } from "../config/redis.js";
 
 const normalizeMarket = (v) => String(v || "").trim().toLowerCase();
-const normalizeSymbol = (v) => String(v || "").trim().toUpperCase();
 
 const makeKey = (market, symbol) => {
-  return `dayhl:${normalizeMarket(market)}:${normalizeSymbol(symbol)}`;
+  return `dayhl:${normalizeMarket(market)}:${normalizeProviderCode(symbol)}`;
 };
 
 const getDayStringIST = () => {
@@ -66,7 +69,7 @@ const inflight = new Map();
 
 const fetchDayHighLowFromAllTick = async (market, symbol) => {
   const m = normalizeMarket(market);
-  const s = normalizeSymbol(symbol);
+  const s = normalizeProviderCode(symbol);
 
   const url = getBatchKlineUrl(m);
 
@@ -185,7 +188,7 @@ const fetchDayHighLowFromAllTick = async (market, symbol) => {
 export const HighLowService = {
   async getDayHighLow(market, symbol) {
     const m = normalizeMarket(market);
-    const s = normalizeSymbol(symbol);
+    const s = await resolveInstrumentProviderCode(symbol);
 
     if (!m || !s) {
       return {
@@ -262,7 +265,7 @@ export const HighLowService = {
 
   async resetDayHighLow(market, symbol) {
     const m = normalizeMarket(market);
-    const s = normalizeSymbol(symbol);
+    const s = await resolveInstrumentProviderCode(symbol);
 
     if (!m || !s) {
       return {

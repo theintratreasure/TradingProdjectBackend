@@ -29,6 +29,7 @@ export class AccountState {
     this.positions = new Map(); // positionId -> Position
 
     this.usedMargin = 0;
+    this.cashEquity = this.balance;
     this.equity = this.balance + this.bonus_live;
     this.freeMarginRaw = this.equity;
     this.freeMargin = this.equity;
@@ -46,9 +47,23 @@ export class AccountState {
 
     const bonusBalance = Number(this.bonus_balance) || 0;
     const bonusPercent = Number(this.bonus_percent) || 0;
+    const cashEquity = this.balance + floatingPnL;
 
-    let bonusLive = bonusBalance;
-    if (floatingPnL < 0 && bonusPercent > 0 && bonusBalance > 0) {
+    this.cashEquity = Number.isFinite(cashEquity)
+      ? Number(cashEquity.toFixed(8))
+      : 0;
+
+    let bonusLive = 0;
+    if (this.cashEquity > 0) {
+      bonusLive = bonusBalance;
+    }
+
+    if (
+      this.cashEquity > 0 &&
+      floatingPnL < 0 &&
+      bonusPercent > 0 &&
+      bonusBalance > 0
+    ) {
       const reduce = Math.abs(floatingPnL) * (bonusPercent / 100);
       bonusLive = Math.max(0, bonusBalance - reduce);
     }
@@ -57,7 +72,7 @@ export class AccountState {
       ? Number(bonusLive.toFixed(8))
       : 0;
 
-    this.equity = this.balance + this.bonus_live + floatingPnL;
+    this.equity = this.cashEquity + this.bonus_live;
     this.freeMarginRaw = this.equity - this.usedMargin;
     this.freeMargin = this.freeMarginRaw < 0 ? 0 : this.freeMarginRaw;
   }
