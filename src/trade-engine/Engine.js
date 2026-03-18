@@ -1292,8 +1292,10 @@ export class Engine {
 
     account.positions.delete(pos.positionId);
 
-    // credit realized pnl to balance
-    account.balance = Number((account.balance + pos.floatingPnL).toFixed(8));
+    // Full-loss accounts should floor at zero, never show a negative cash balance.
+    account.balance = Number(
+      Math.max(0, account.balance + pos.floatingPnL).toFixed(8),
+    );
 
     let bonusDeduct = 0;
     if (pos.floatingPnL < 0) {

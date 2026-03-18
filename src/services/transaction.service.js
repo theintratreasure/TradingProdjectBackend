@@ -17,7 +17,13 @@ export async function getUserTransactionHistoryService({
   const skip = (page - 1) * limit;
 
   const filter = {
-    user: userId
+    user: userId,
+    $nor: [
+      {
+        type: "ADJUSTMENT",
+        referenceType: "SYSTEM",
+      },
+    ],
   };
 
   // Optional filters

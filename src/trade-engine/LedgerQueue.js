@@ -280,7 +280,9 @@ class LedgerQueue {
       [
         {
           $set: {
-            balance: { $add: [{ $ifNull: ["$balance", 0] }, pnl] },
+            balance: {
+              $max: [0, { $add: [{ $ifNull: ["$balance", 0] }, pnl] }],
+            },
             bonus_balance: newBonusBalance,
           },
         },
