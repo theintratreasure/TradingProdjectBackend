@@ -43,10 +43,12 @@ function resolveBonusPercent(account, settings) {
 
 class LedgerQueue {
   constructor() {
+    this.queue = [];
+    this.processing = false;
+
     engineEvents.on("ledger", (job) => {
-      this.process(job).catch((err) => {
-        console.error("[LEDGER][FATAL]", err);
-      });
+      this.queue.push(job);
+      this.scheduleDrain();
     });
 
     console.log("[LEDGER] LedgerQueue initialized");
@@ -56,6 +58,38 @@ class LedgerQueue {
     setImmediate(() => {
       engineEvents.emit("ledger", { event, payload });
     });
+  }
+
+  scheduleDrain() {
+    if (this.processing) return;
+
+    this.processing = true;
+
+    setImmediate(() => {
+      this.drain().catch((err) => {
+        console.error("[LEDGER][FATAL]", err);
+      });
+    });
+  }
+
+  async drain() {
+    try {
+      while (this.queue.length > 0) {
+        const job = this.queue.shift();
+
+        try {
+          await this.process(job);
+        } catch (err) {
+          console.error("[LEDGER][FATAL]", err);
+        }
+      }
+    } finally {
+      this.processing = false;
+
+      if (this.queue.length > 0) {
+        this.scheduleDrain();
+      }
+    }
   }
 
   async process({ event, payload }) {
@@ -208,8 +242,6 @@ class LedgerQueue {
       return;
     }
 
-    const newBalance = Number(account.balance) + pnl;
-
     let bonusDeductValue = Number(bonusDeduct);
     if (!Number.isFinite(bonusDeductValue) || bonusDeductValue < 0) {
       bonusDeductValue = 0;
@@ -242,15 +274,41 @@ class LedgerQueue {
       : bonusDeductValue > 0
         ? Math.max(0, currentBonus - bonusDeductValue)
         : currentBonus;
-    const newEquity = Number(newBalance) + Number(newBonusBalance);
 
-    await Account.updateOne(
+    const accountAfter = await Account.findOneAndUpdate(
       { _id: accountId },
-      { $set: { balance: newBalance, bonus_balance: newBonusBalance, equity: newEquity } }
+      [
+        {
+          $set: {
+            balance: { $add: [{ $ifNull: ["$balance", 0] }, pnl] },
+            bonus_balance: newBonusBalance,
+          },
+        },
+        {
+          $set: {
+            equity: {
+              $add: [
+                { $ifNull: ["$balance", 0] },
+                { $ifNull: ["$bonus_balance", 0] },
+              ],
+            },
+          },
+        },
+      ],
+      { new: true, updatePipeline: true }
     );
 
+    if (!accountAfter) {
+      console.error("[LEDGER][TRADE_CLOSE] Account update failed", accountId);
+      return;
+    }
+
+    const newBalance = Number(accountAfter.balance);
+    const persistedBonusBalance = Number(accountAfter.bonus_balance || 0);
+    const newEquity = Number(accountAfter.equity ?? newBalance + persistedBonusBalance);
+
     // Fanout: keep other Node workers' RAM in sync with the DB balance update.
-    publishAccountBalance(String(accountId), newBalance, newBonusBalance);
+    publishAccountBalance(String(accountId), newBalance, persistedBonusBalance);
 
     const txn = await Transaction.create({
       user: userId || trade.userId,
