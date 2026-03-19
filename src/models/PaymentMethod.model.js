@@ -32,6 +32,16 @@ const paymentMethodSchema = new mongoose.Schema(
     international_name: String,
     international_email: String,
 
+    // Conversion settings (manual rate to USDT)
+    conversion_currency: {
+      type: String,
+      default: ''
+    },
+    conversion_rate: {
+      type: Number,
+      default: null
+    },
+
     // IMAGE (Cloudinary)
     image_url: {
       type: String,

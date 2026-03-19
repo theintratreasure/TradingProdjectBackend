@@ -36,6 +36,18 @@ export async function createPaymentMethodService(userId, body) {
     is_active: true
   };
 
+  const rawCurrency =
+    typeof body.conversion_currency === 'string'
+      ? body.conversion_currency.trim().toUpperCase()
+      : '';
+  const rawRate =
+    body.conversion_rate !== undefined && body.conversion_rate !== null
+      ? Number(body.conversion_rate)
+      : null;
+
+  const hasValidRate =
+    rawRate !== null && Number.isFinite(rawRate) && rawRate > 0;
+
   if (type === 'BANK') {
     if (
       !body.bank_name ||
@@ -56,6 +68,13 @@ export async function createPaymentMethodService(userId, body) {
     if (body.swift_code) {
       payload.swift_code = String(body.swift_code).trim();
     }
+
+    if (rawCurrency) {
+      payload.conversion_currency = rawCurrency;
+    }
+    if (hasValidRate) {
+      payload.conversion_rate = rawRate;
+    }
   }
 
   if (type === 'UPI') {
@@ -65,6 +84,13 @@ export async function createPaymentMethodService(userId, body) {
       throw err;
     }
     payload.upi_id = body.upi_id;
+
+    if (rawCurrency) {
+      payload.conversion_currency = rawCurrency;
+    }
+    if (hasValidRate) {
+      payload.conversion_rate = rawRate;
+    }
   }
 
   if (type === 'CRYPTO') {
@@ -85,6 +111,13 @@ export async function createPaymentMethodService(userId, body) {
     }
     payload.international_name = body.international_name;
     payload.international_email = body.international_email;
+
+    if (rawCurrency) {
+      payload.conversion_currency = rawCurrency;
+    }
+    if (hasValidRate) {
+      payload.conversion_rate = rawRate;
+    }
   }
 
   const created = await PaymentMethod.create(payload);
