@@ -150,6 +150,20 @@ class EngineSync {
     await this.syncAccount(accountId);
   }
 
+  static removeAccount(accountId) {
+    const id = String(accountId || "");
+    if (!id) return;
+
+    const acc = tradeEngine.accounts.get(id);
+    if (acc) {
+      acc.positions?.clear?.();
+      acc.pendingOrders?.clear?.();
+    }
+
+    tradeEngine.accounts.delete(id);
+    console.log("[ENGINE_SYNC] account removed:", id);
+  }
+
   /* ===========================
      DEPOSIT
   ============================ */

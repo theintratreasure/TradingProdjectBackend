@@ -3,9 +3,20 @@ import Account from "../models/Account.model.js";
 import AccountPlan from "../models/AccountPlan.model.js";
 import AccountAuth from "../models/AccountAuth.model.js";
 import User from "../models/User.model.js";
+import Trade from "../models/Trade.model.js";
+import PendingOrder from "../models/PendingOrder.model.js";
+import Brokerage from "../models/Brokerage.model.js";
+import Transaction from "../models/Transaction.model.js";
+import Deposit from "../models/Deposit.model.js";
+import Withdrawal from "../models/Withdrawal.model.js";
+import WatchlistItem from "../models/watchlistItem.model.js";
+import ReferralReward from "../models/ReferralReward.model.js";
 
 import EngineSync from "../trade-engine/EngineSync.js";
-import { publishAccountSnapshot } from "../trade-engine/EngineSyncBus.js";
+import {
+  publishAccountSnapshot,
+  publishAccountRemove,
+} from "../trade-engine/EngineSyncBus.js";
 
 import { sendAccountCreatedMail } from "../utils/mail.util.js";
 import { generateAccountNumber } from "../utils/accountNumber.util.js";
@@ -645,5 +656,55 @@ export async function adminUpdateAccountService({ accountId, payload = {} }) {
   publishAccountSnapshot(account);
 
   return account.toObject();
+}
+
+/* =====================================================
+   ADMIN: DELETE ACCOUNT (CASCADE)
+===================================================== */
+export async function adminDeleteAccountService({ accountId, userId }) {
+  if (!accountId || !mongoose.isValidObjectId(accountId)) {
+    throw new Error("Invalid accountId");
+  }
+
+  const accountFilter = { _id: accountId };
+  if (userId !== undefined) {
+    if (!mongoose.isValidObjectId(userId)) {
+      throw new Error("Invalid userId");
+    }
+    accountFilter.user_id = userId;
+  }
+
+  const account = await Account.findOne(accountFilter)
+    .select("_id user_id account_number account_type")
+    .lean();
+
+  if (!account) {
+    throw new Error("Account not found");
+  }
+
+  await Promise.all([
+    AccountAuth.deleteOne({ account_id: account._id }),
+    PendingOrder.deleteMany({ accountId: account._id }),
+    Trade.deleteMany({ accountId: account._id }),
+    Brokerage.deleteMany({ account_id: account._id }),
+    Transaction.deleteMany({ account: account._id }),
+    Deposit.deleteMany({ account: account._id }),
+    Withdrawal.deleteMany({ account: account._id }),
+    WatchlistItem.deleteMany({ accountId: account._id }),
+    ReferralReward.deleteMany({
+      $or: [{ referred_account: account._id }, { requested_account: account._id }],
+    }),
+    Account.deleteOne({ _id: account._id }),
+  ]);
+
+  EngineSync.removeAccount(String(account._id));
+  publishAccountRemove(String(account._id));
+
+  return {
+    accountId: String(account._id),
+    accountNumber: account.account_number,
+    accountType: account.account_type,
+    userId: String(account.user_id),
+  };
 }
 

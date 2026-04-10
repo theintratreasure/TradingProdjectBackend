@@ -6,7 +6,8 @@ import {
   setAccountLeverage,
   adminListUserAccounts,
   adminSearchAccounts,
-  adminUpdateAccountService
+  adminUpdateAccountService,
+  adminDeleteAccountService
 } from "../services/account.service.js";
 
 export async function createAccountController(req, res) {
@@ -187,6 +188,24 @@ export async function adminUpdateAccountController(req, res) {
     return res.status(400).json({
       success: false,
       message: err.message
+    });
+  }
+}
+
+export async function adminDeleteAccountController(req, res) {
+  try {
+    const { accountId } = req.params;
+    const data = await adminDeleteAccountService({ accountId });
+
+    return res.json({
+      success: true,
+      message: "Account deleted successfully",
+      data,
+    });
+  } catch (err) {
+    return res.status(400).json({
+      success: false,
+      message: err.message,
     });
   }
 }

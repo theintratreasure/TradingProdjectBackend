@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { adminGetUserProfile, adminListUsers, adminSearchUsers, adminUpdateUser, getMyProfile, saveFcmToken } from '../../controllers/user.controller.js';
+import { adminDeleteUser, adminGetUserProfile, adminListUsers, adminSearchUsers, adminUpdateUser, getMyProfile, saveFcmToken } from '../../controllers/user.controller.js';
 import { authMiddleware } from '../../middlewares/auth.middleware.js';
 import { adminAuth } from '../../middlewares/adminAuth.middleware.js';
 import { updateMyProfile } from '../../controllers/user.controller.js';
@@ -15,4 +15,5 @@ router.get('/admin/search', authMiddleware, adminAuth, adminSearchUsers);
 router.get('/admin/list', authMiddleware, adminAuth, adminListUsers);
 router.get('/admin/:userId', authMiddleware, adminAuth, adminGetUserProfile);
 router.patch('/admin/:userId', authMiddleware, adminAuth, adminUpdateUser);
+router.delete('/admin/:userId', authMiddleware, adminAuth, adminDeleteUser);
 export default router;

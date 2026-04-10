@@ -105,6 +105,11 @@ export function startEngineSyncBus() {
         return;
       }
 
+      if (type === "ACCOUNT_REMOVE") {
+        EngineSync.removeAccount(payload?.accountId);
+        return;
+      }
+
       if (type === "SYMBOL_UPSERT") {
         EngineSync.loadSymbolFromInstrument(payload?.instrument || payload);
         return;
@@ -172,6 +177,13 @@ export function publishAccountBalance(accountId, balance, bonusBalance) {
     accountId: String(accountId),
     balance,
     bonusBalance,
+  });
+}
+
+export function publishAccountRemove(accountId) {
+  if (!accountId) return;
+  publish("ACCOUNT_REMOVE", {
+    accountId: String(accountId),
   });
 }
 

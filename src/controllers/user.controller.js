@@ -1,5 +1,5 @@
 import UserDevice from '../models/UserDevice.model.js';
-import { adminGetUserProfileService, adminListUsersService, adminUpdateUserService, getMyProfileService, updateMyProfileService, searchUsersService } from '../services/user.service.js';
+import { adminDeleteUserService, adminGetUserProfileService, adminListUsersService, adminUpdateUserService, getMyProfileService, updateMyProfileService, searchUsersService } from '../services/user.service.js';
 
 export async function getMyProfile(req, res) {
   const data = await getMyProfileService(req.user._id);
@@ -165,6 +165,24 @@ export async function adminGetUserProfile(req, res) {
     return res.status(400).json({
       success: false,
       message: err.message
+    });
+  }
+}
+
+export async function adminDeleteUser(req, res) {
+  try {
+    const { userId } = req.params;
+    const data = await adminDeleteUserService(userId);
+
+    return res.json({
+      success: true,
+      message: 'User deleted successfully',
+      data,
+    });
+  } catch (err) {
+    return res.status(400).json({
+      success: false,
+      message: err.message,
     });
   }
 }

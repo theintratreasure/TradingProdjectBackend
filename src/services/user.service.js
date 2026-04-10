@@ -2,6 +2,21 @@ import mongoose from 'mongoose';
 import User from '../models/User.model.js';
 import UserProfile from '../models/UserProfile.model.js';
 import Kyc from '../models/Kyc.model.js';
+import Auth from '../models/Auth.model.js';
+import Referral from '../models/Referral.model.js';
+import UserDevice from '../models/UserDevice.model.js';
+import Otp from '../models/Otp.model.js';
+import ActivityLog from '../models/ActivityLog.model.js';
+import ReferralReward from '../models/ReferralReward.model.js';
+import Account from '../models/Account.model.js';
+import Trade from '../models/Trade.model.js';
+import PendingOrder from '../models/PendingOrder.model.js';
+import Brokerage from '../models/Brokerage.model.js';
+import Transaction from '../models/Transaction.model.js';
+import Deposit from '../models/Deposit.model.js';
+import Withdrawal from '../models/Withdrawal.model.js';
+import WatchlistItem from '../models/watchlistItem.model.js';
+import { adminDeleteAccountService } from './account.service.js';
 
 // search users by name or email
 export async function searchUsersService(query = {}) {
@@ -369,4 +384,53 @@ export async function adminGetUserProfileService(userId) {
   ]);
 
   return result.length ? result[0] : null;
+}
+
+export async function adminDeleteUserService(userId) {
+  if (!mongoose.isValidObjectId(userId)) {
+    throw new Error('Invalid userId');
+  }
+
+  const user = await User.findById(userId).select('_id').lean();
+  if (!user) {
+    throw new Error('User not found');
+  }
+
+  const accounts = await Account.find({ user_id: userId }).select('_id').lean();
+  const accountIds = accounts.map((item) => item._id);
+
+  for (const accountId of accountIds) {
+    await adminDeleteAccountService({
+      accountId: String(accountId),
+      userId: String(userId),
+    });
+  }
+
+  await Promise.all([
+    Auth.deleteOne({ user_id: userId }),
+    Referral.deleteOne({ user_id: userId }),
+    UserProfile.deleteOne({ user_id: userId }),
+    Kyc.deleteOne({ user: userId }),
+    UserDevice.deleteMany({ user_id: userId }),
+    Otp.deleteMany({ user_id: userId }),
+    ActivityLog.deleteMany({
+      $or: [{ user_id: userId }, { actor_id: userId }],
+    }),
+    ReferralReward.deleteMany({
+      $or: [{ referred_user: userId }, { referrer_user: userId }],
+    }),
+    Trade.deleteMany({ userId }),
+    PendingOrder.deleteMany({ userId }),
+    Brokerage.deleteMany({ user_id: userId }),
+    Transaction.deleteMany({ user: userId }),
+    Deposit.deleteMany({ user: userId }),
+    Withdrawal.deleteMany({ user: userId }),
+    WatchlistItem.deleteMany({ userId }),
+    User.deleteOne({ _id: userId }),
+  ]);
+
+  return {
+    userId: String(userId),
+    deletedAccounts: accountIds.length,
+  };
 }

@@ -10,7 +10,8 @@ import {
   setAccountLeverageController,
   adminListUserAccountsController,
   adminSearchAccountsController,
-  adminUpdateAccountController
+  adminUpdateAccountController,
+  adminDeleteAccountController
 } from "../../controllers/account.controller.js";
 
 const router = express.Router();
@@ -23,5 +24,6 @@ router.post("/:id/set-leverage", authMiddleware, setAccountLeverageController);
 router.get("/admin/user/:userId", authMiddleware, adminAuth, adminListUserAccountsController);
 router.get("/admin/search", authMiddleware, adminAuth, adminSearchAccountsController);
 router.patch("/admin/:accountId", authMiddleware, adminAuth, adminUpdateAccountController);
+router.delete("/admin/:accountId", authMiddleware, adminAuth, adminDeleteAccountController);
 
 export default router;
