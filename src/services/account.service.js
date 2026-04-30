@@ -272,7 +272,14 @@ export async function getUserAccounts(userId) {
     },
   )
     .sort({ createdAt: -1 })
-    .lean();
+    .lean()
+    .then((items) =>
+      items.map((account) => ({
+        ...account,
+        total_balance:
+          Number(account.balance || 0) + Number(account.bonus_balance || 0),
+      }))
+    );
 }
 
 /* =====================================================
@@ -316,7 +323,11 @@ export async function getUserAccountDetail({ userId, accountId }) {
     throw err;
   }
 
-  return account;
+  return {
+    ...account,
+    total_balance:
+      Number(account.balance || 0) + Number(account.bonus_balance || 0),
+  };
 }
 
 /* =====================================================
@@ -431,7 +442,11 @@ export async function adminListUserAccounts({ userId, query = {} }) {
   ]);
 
   return {
-    items,
+    items: items.map((account) => ({
+      ...account,
+      total_balance:
+        Number(account.balance || 0) + Number(account.bonus_balance || 0),
+    })),
     pagination: {
       page,
       limit,
@@ -540,7 +555,11 @@ export async function adminSearchAccounts({ query = {} }) {
   const total = result?.[0]?.total?.[0]?.count || 0;
 
   return {
-    items,
+    items: items.map((account) => ({
+      ...account,
+      total_balance:
+        Number(account.balance || 0) + Number(account.bonus_balance || 0),
+    })),
     pagination: {
       page,
       limit,
@@ -655,7 +674,11 @@ export async function adminUpdateAccountService({ accountId, payload = {} }) {
   await EngineSync.syncAccount(account._id);
   publishAccountSnapshot(account);
 
-  return account.toObject();
+  return {
+    ...account.toObject(),
+    total_balance:
+      Number(account.balance || 0) + Number(account.bonus_balance || 0),
+  };
 }
 
 /* =====================================================

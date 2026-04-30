@@ -26,6 +26,7 @@ const TransactionSchema = new mongoose.Schema(
         "TRADE_LOSS",
         "SWAP",
         "BONUS",
+        "BONUS_MANUAL",
         "BONUS_CREDIT_IN",
         "BONUS_CREDIT_OUT",
         "REFERRAL",

@@ -138,15 +138,21 @@ export async function getEffectiveBonusPercentForAccount(account) {
 
 export async function adminCreditBonusService({
   adminId,
+  userId,
   accountId,
   amount,
+  bonusAmount,
   reason,
 }) {
   if (!accountId) {
     throw new Error("accountId is required");
   }
-  if (typeof amount !== "number" || Number.isNaN(amount) || amount <= 0) {
-    throw new Error("amount must be a number greater than 0");
+  const normalizedAmount =
+    typeof bonusAmount === "number" && Number.isFinite(bonusAmount)
+      ? bonusAmount
+      : Number(amount);
+  if (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0) {
+    throw new Error("bonusAmount must be a number greater than 0");
   }
 
   const session = await mongoose.startSession();
@@ -167,10 +173,18 @@ export async function adminCreditBonusService({
         throw new Error("Bonus can be credited only to live accounts");
       }
 
-      const bonusAdd = Number(amount);
+      if (
+        userId &&
+        String(account.user_id) !== String(userId)
+      ) {
+        throw new Error("Account does not belong to the specified user");
+      }
+
+      const bonusAdd = Number(normalizedAmount);
+      const currentRealBalance = Number(account.balance || 0);
       const newBonusBalance = Number(account.bonus_balance || 0) + bonusAdd;
       const newBonusGranted = Number(account.bonus_granted || 0) + bonusAdd;
-      const newEquity = Number(account.balance || 0) + newBonusBalance;
+      const newEquity = currentRealBalance + newBonusBalance;
 
       await Account.updateOne(
         { _id: account._id },
@@ -189,15 +203,15 @@ export async function adminCreditBonusService({
           {
             user: account.user_id,
             account: account._id,
-            type: "BONUS_CREDIT_IN",
+            type: "BONUS_MANUAL",
             amount: bonusAdd,
-            balanceAfter: Number(account.balance || 0),
+            balanceAfter: currentRealBalance,
             equityAfter: newEquity,
             status: "SUCCESS",
             referenceType: "SYSTEM",
             referenceId: account._id,
             createdBy: adminId,
-            remark: reason ? `Admin bonus credit: ${reason}` : "Admin bonus credit",
+            remark: reason ? `Manual bonus added: ${reason}` : "Manual bonus added",
           },
         ],
         { session },
@@ -205,9 +219,12 @@ export async function adminCreditBonusService({
 
       result = {
         accountId: String(account._id),
+        userId: String(account.user_id),
         bonusAdded: bonusAdd,
+        realBalance: currentRealBalance,
         bonusBalance: newBonusBalance,
         equity: newEquity,
+        totalBalance: newEquity,
       };
     });
   } finally {

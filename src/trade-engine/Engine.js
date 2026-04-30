@@ -1288,37 +1288,25 @@ export class Engine {
     }
 
     pos.updatePnL(formatted.bid, formatted.ask, sym?.contractSize);
-    const capitalExhaustedBeforeClose = RiskManager.capitalExhausted(account);
+    const realBalanceBeforeClose = Number(account.balance) || 0;
+    const bonusBalanceBeforeClose = Number(account.bonus_balance) || 0;
 
     account.positions.delete(pos.positionId);
 
     // Full-loss accounts should floor at zero, never show a negative cash balance.
     account.balance = Number(
-      Math.max(0, account.balance + pos.floatingPnL).toFixed(8),
+      Math.max(0, realBalanceBeforeClose + pos.floatingPnL).toFixed(8),
     );
 
     let bonusDeduct = 0;
     if (pos.floatingPnL < 0) {
-      const percent = Number(account.bonus_percent) || 0;
-      const bonusBalance = Number(account.bonus_balance) || 0;
-      if (percent > 0 && bonusBalance > 0) {
-        const raw = Math.abs(pos.floatingPnL) * (percent / 100);
-        bonusDeduct = Math.min(bonusBalance, raw);
-        if (bonusDeduct > 0) {
-          account.bonus_balance = Number(
-            (bonusBalance - bonusDeduct).toFixed(8),
-          );
-        }
+      const overflowLoss = Math.max(0, Math.abs(pos.floatingPnL) - realBalanceBeforeClose);
+      if (overflowLoss > 0 && bonusBalanceBeforeClose > 0) {
+        bonusDeduct = Math.min(bonusBalanceBeforeClose, overflowLoss);
+        account.bonus_balance = Number(
+          Math.max(0, bonusBalanceBeforeClose - bonusDeduct).toFixed(8),
+        );
       }
-    }
-
-    if (
-      (capitalExhaustedBeforeClose || account.balance <= 0) &&
-      Number(account.bonus_balance || 0) > 0
-    ) {
-      const remainingBonus = Number(account.bonus_balance || 0);
-      bonusDeduct = Number((bonusDeduct + remainingBonus).toFixed(8));
-      account.bonus_balance = 0;
     }
 
     // recalc after balance change

@@ -3,43 +3,8 @@ import Trade from "../models/Trade.model.js";
 import Transaction from "../models/Transaction.model.js";
 import PendingOrder from "../models/PendingOrder.model.js";
 import Brokerage from "../models/Brokerage.model.js";
-import BonusSetting from "../models/BonusSetting.model.js";
 import { engineEvents } from "./EngineEvents.js";
 import { publishAccountBalance } from "./EngineSyncBus.js";
-
-const BONUS_SETTINGS_KEY = "GLOBAL";
-const BONUS_CACHE_TTL_MS = 30 * 1000;
-const MAX_BONUS_PERCENT = 200;
-let cachedBonusSettings = null;
-let cachedBonusAt = 0;
-
-function normalizePercent(value) {
-  const n = Number(value);
-  if (!Number.isFinite(n) || n < 0) return 0;
-  return n > MAX_BONUS_PERCENT ? MAX_BONUS_PERCENT : n;
-}
-
-async function getBonusSettingsCached() {
-  const now = Date.now();
-  if (cachedBonusSettings && now - cachedBonusAt < BONUS_CACHE_TTL_MS) {
-    return cachedBonusSettings;
-  }
-
-  const settings = await BonusSetting.findOne({ key: BONUS_SETTINGS_KEY }).lean();
-  cachedBonusSettings = settings || { bonus_enabled: true, default_bonus_percent: 0 };
-  cachedBonusAt = now;
-  return cachedBonusSettings;
-}
-
-function resolveBonusPercent(account, settings) {
-  if (!settings?.bonus_enabled) return 0;
-  const override =
-    account && typeof account.bonus_percent_override === "number"
-      ? account.bonus_percent_override
-      : null;
-  if (override !== null) return normalizePercent(override);
-  return normalizePercent(settings?.default_bonus_percent || 0);
-}
 
 class LedgerQueue {
   constructor() {
@@ -242,32 +207,18 @@ class LedgerQueue {
       return;
     }
 
+    const currentRealBalance = Number(account.balance || 0);
+    const currentBonus = Number(account.bonus_balance || 0);
     let bonusDeductValue = Number(bonusDeduct);
     if (!Number.isFinite(bonusDeductValue) || bonusDeductValue < 0) {
       bonusDeductValue = 0;
     }
-
     if (bonusDeductValue === 0 && pnl < 0) {
-      let effectivePercent = Number(bonusPercent);
-      if (!Number.isFinite(effectivePercent) || effectivePercent < 0) {
-        try {
-          const settings = await getBonusSettingsCached();
-          effectivePercent = resolveBonusPercent(account, settings);
-        } catch {
-          effectivePercent = 0;
-        }
-      }
-
-      if (effectivePercent > 0 && Number(account.bonus_balance || 0) > 0) {
-        const raw = Math.abs(pnl) * (effectivePercent / 100);
-        bonusDeductValue = Math.min(
-          Number(account.bonus_balance || 0),
-          Number(raw.toFixed(8)),
-        );
-      }
+      bonusDeductValue = Math.min(
+        currentBonus,
+        Math.max(0, Math.abs(pnl) - currentRealBalance),
+      );
     }
-
-    const currentBonus = Number(account.bonus_balance || 0);
     const requestedBonusBalance = Number(bonusBalance);
     const newBonusBalance = Number.isFinite(requestedBonusBalance)
       ? Math.max(0, requestedBonusBalance)
@@ -322,10 +273,10 @@ class LedgerQueue {
       referenceType: "TRADE",
       referenceId: trade._id,
       status: "SUCCESS",
-      remark:
-        pnl >= 0
-          ? "Trade profit credited"
-          : "Trade loss debited",
+        remark:
+          pnl >= 0
+            ? "Trade profit credited"
+            : "Trade loss debited",
       createdAt: new Date(),
     });
 
@@ -351,7 +302,7 @@ class LedgerQueue {
         referenceType: "TRADE",
         referenceId: trade._id,
         status: "SUCCESS",
-        remark: "Bonus reduced on trade loss",
+        remark: "Bonus consumed after real balance was exhausted",
         createdAt: new Date(),
       });
     }

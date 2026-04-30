@@ -31,21 +31,25 @@ export class RiskManager {
   }
 
   static capitalExhausted(account) {
-    return this.cashEquity(account) <= 0;
+    return (Number(account?.equity) || 0) <= 0;
   }
 
   // ===============================
   // LOSS %
   // ===============================
   static lossPercent(account) {
+    const realBalance = Number(account?.balance) || 0;
+    const bonusBalance = Number(account?.bonus_balance) || 0;
+    const totalBalance = realBalance + bonusBalance;
+    const equity = Number(account?.equity) || 0;
 
-    if (account.balance <= 0) return 100;
+    if (totalBalance <= 0) return equity <= 0 ? 100 : 0;
 
-    const loss = account.balance - account.equity;
+    const loss = totalBalance - equity;
 
     if (loss <= 0) return 0;
 
-    return (loss / account.balance) * 100;
+    return (loss / totalBalance) * 100;
   }
 
   // ===============================

@@ -15,5 +15,6 @@ router.put("/settings", authMiddleware, adminAuth, adminUpdateBonusSettings);
 
 // Admin manual credit
 router.post("/admin/credit", authMiddleware, adminAuth, adminCreditBonus);
+router.post("/admin/add-bonus", authMiddleware, adminAuth, adminCreditBonus);
 
 export default router;

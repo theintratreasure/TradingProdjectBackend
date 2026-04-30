@@ -33,16 +33,18 @@ export async function adminUpdateBonusSettings(req, res) {
 
 export async function adminCreditBonus(req, res) {
   try {
-    const { accountId, amount, reason } = req.body || {};
+    const { userId, accountId, amount, bonusAmount, reason } = req.body || {};
     const data = await adminCreditBonusService({
       adminId: req.user?._id || null,
+      userId,
       accountId,
       amount: Number(amount),
+      bonusAmount: Number(bonusAmount),
       reason,
     });
     return res.status(200).json({
       success: true,
-      message: "Bonus credited",
+      message: "Bonus added successfully",
       data,
     });
   } catch (err) {

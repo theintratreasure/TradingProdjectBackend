@@ -11,7 +11,6 @@ import redis from "../config/redis.js";
 import EngineSync from "../trade-engine/EngineSync.js";
 import { publishAccountBalance } from "../trade-engine/EngineSyncBus.js";
 import { createReferralRewardEligibility } from "./referral.service.js";
-import { getEffectiveBonusPercentForAccount } from "./bonus.service.js";
 
 const DEPOSIT_METHODS = new Set([
   "UPI",
@@ -548,17 +547,9 @@ export async function approveDepositService(depositId, adminId) {
       /* =========================
          4. CALCULATE BALANCE
       ========================== */
-      const newBalance = account.balance + deposit.amount;
-      const bonusPercent = await getEffectiveBonusPercentForAccount(account);
-      const bonusAmount =
-        account.account_type === "live" && bonusPercent > 0
-          ? Number(((deposit.amount * bonusPercent) / 100).toFixed(8))
-          : 0;
-      const newBonusBalance =
-        Number(account.bonus_balance || 0) + bonusAmount;
-      const newBonusGranted =
-        Number(account.bonus_granted || 0) + bonusAmount;
-      const newEquity = Number(newBalance) + Number(newBonusBalance);
+      const newBalance = Number(account.balance || 0) + Number(deposit.amount || 0);
+      const currentBonusBalance = Number(account.bonus_balance || 0);
+      const newEquity = Number(newBalance) + currentBonusBalance;
 
       /* =========================
          5. UPDATE DEPOSIT
@@ -567,8 +558,8 @@ export async function approveDepositService(depositId, adminId) {
       deposit.actionBy = adminId;
       deposit.actionAt = new Date();
       deposit.rejectionReason = "";
-      deposit.bonus_percent = Number(bonusPercent || 0);
-      deposit.bonus_amount = Number(bonusAmount || 0);
+      deposit.bonus_percent = 0;
+      deposit.bonus_amount = 0;
 
       await deposit.save({ session });
 
@@ -581,8 +572,6 @@ export async function approveDepositService(depositId, adminId) {
           $set: {
             balance: newBalance,
             first_deposit: true,
-            bonus_balance: newBonusBalance,
-            bonus_granted: newBonusGranted,
             equity: newEquity,
           },
         },
@@ -622,30 +611,9 @@ export async function approveDepositService(depositId, adminId) {
         { session },
       );
 
-      if (bonusAmount > 0) {
-        await Transaction.create(
-          [
-            {
-              user: deposit.user,
-              account: deposit.account,
-              type: "BONUS_CREDIT_IN",
-              amount: bonusAmount,
-              balanceAfter: newBalance,
-              equityAfter: newEquity,
-              status: "SUCCESS",
-              referenceType: "DEPOSIT",
-              referenceId: deposit._id,
-              createdBy: adminId,
-              remark: "Deposit bonus credited",
-            },
-          ],
-          { session },
-        );
-      }
-
       engineAccountId = String(account._id);
       engineNewBalance = Number(newBalance);
-      engineBonusBalance = Number(newBonusBalance);
+      engineBonusBalance = currentBonusBalance;
     });
 
     /* =========================
@@ -793,19 +761,11 @@ export async function adminCreateDepositService({
       }
       const isFirstDeposit = account.first_deposit === false;
 
-      const newBalance = account.balance + amount;
+      const newBalance = Number(account.balance || 0) + Number(amount || 0);
       engineNewBalance = Number(newBalance);
-      const bonusPercent = await getEffectiveBonusPercentForAccount(account);
-      const bonusAmount =
-        account.account_type === "live" && bonusPercent > 0
-          ? Number(((amount * bonusPercent) / 100).toFixed(8))
-          : 0;
-      const newBonusBalance =
-        Number(account.bonus_balance || 0) + bonusAmount;
-      const newBonusGranted =
-        Number(account.bonus_granted || 0) + bonusAmount;
-      const newEquity = Number(newBalance) + Number(newBonusBalance);
-      engineBonusBalance = Number(newBonusBalance);
+      const currentBonusBalance = Number(account.bonus_balance || 0);
+      const newEquity = Number(newBalance) + currentBonusBalance;
+      engineBonusBalance = currentBonusBalance;
 
       createdDeposit = await Deposit.create(
         [
@@ -815,8 +775,8 @@ export async function adminCreateDepositService({
             amount,
             method: normalizedMethod,
             proof: safeProof,
-            bonus_percent: Number(bonusPercent || 0),
-            bonus_amount: Number(bonusAmount || 0),
+            bonus_percent: 0,
+            bonus_amount: 0,
             status: "APPROVED",
             actionBy: adminId,
             actionAt: importDateTime || new Date(),
@@ -835,8 +795,6 @@ export async function adminCreateDepositService({
           $set: {
             balance: newBalance,
             first_deposit: true,
-            bonus_balance: newBonusBalance,
-            bonus_granted: newBonusGranted,
             equity: newEquity,
           },
         },
@@ -876,29 +834,6 @@ export async function adminCreateDepositService({
         { session },
       );
 
-      if (bonusAmount > 0) {
-        await Transaction.create(
-          [
-            {
-              user: account.user_id,
-              account: account._id,
-              type: "BONUS_CREDIT_IN",
-              amount: bonusAmount,
-              balanceAfter: newBalance,
-              equityAfter: newEquity,
-              status: "SUCCESS",
-              referenceType: "DEPOSIT",
-              referenceId: createdDeposit[0]._id,
-              createdBy: adminId,
-              remark: "Deposit bonus credited",
-              ...(importDateTime
-                ? { createdAt: importDateTime, updatedAt: importDateTime }
-                : {}),
-            },
-          ],
-          { session },
-        );
-      }
     });
 
     // Sync engine after DB commit
