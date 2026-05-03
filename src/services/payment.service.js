@@ -224,13 +224,6 @@ export async function togglePaymentMethodService(id, isActive) {
 
   const activate = Boolean(isActive);
 
-  if (activate && (existing.type === 'BANK' || existing.type === 'UPI')) {
-    await PaymentMethod.updateMany(
-      { _id: { $ne: existing._id }, type: existing.type, is_active: true },
-      { $set: { is_active: false } }
-    );
-  }
-
   const updated = await PaymentMethod.findByIdAndUpdate(
     id,
     { $set: { is_active: activate } },
