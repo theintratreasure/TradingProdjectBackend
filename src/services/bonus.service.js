@@ -4,6 +4,7 @@ import Account from "../models/Account.model.js";
 import Transaction from "../models/Transaction.model.js";
 import EngineSync from "../trade-engine/EngineSync.js";
 import { publishAccountBalance, publishBonusSettings } from "../trade-engine/EngineSyncBus.js";
+import { increaseNonWithdrawableBalance } from "../utils/nonWithdrawable.util.js";
 
 const SETTINGS_KEY = "GLOBAL";
 const CACHE_TTL_MS = 30 * 1000;
@@ -240,6 +241,125 @@ export async function adminCreditBonusService({
     } catch (err) {
       console.error(
         "[BONUS] EngineSync.updateBalance failed (admin credit)",
+        err?.message || err,
+      );
+    }
+  }
+
+  return result;
+}
+
+export async function adminCreditTradableFundService({
+  adminId,
+  userId,
+  accountId,
+  amount,
+  tradableFundAmount,
+  reason,
+}) {
+  if (!accountId) {
+    throw new Error("accountId is required");
+  }
+
+  const normalizedAmount =
+    typeof tradableFundAmount === "number" && Number.isFinite(tradableFundAmount)
+      ? tradableFundAmount
+      : Number(amount);
+
+  if (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0) {
+    throw new Error("tradableFundAmount must be a number greater than 0");
+  }
+
+  const session = await mongoose.startSession();
+  let result = null;
+
+  try {
+    await session.withTransaction(async () => {
+      const account = await Account.findOne({
+        _id: accountId,
+        status: "active",
+      }).session(session);
+
+      if (!account) {
+        throw new Error("Account not found or inactive");
+      }
+
+      if (account.account_type !== "live") {
+        throw new Error("Tradable fund can be added only to live accounts");
+      }
+
+      if (userId && String(account.user_id) !== String(userId)) {
+        throw new Error("Account does not belong to the specified user");
+      }
+
+      const fundAdd = Number(normalizedAmount);
+      const currentRealBalance = Number(account.balance || 0);
+      const newBalance = currentRealBalance + fundAdd;
+      const nextLockedBalance = increaseNonWithdrawableBalance({
+        currentLocked: account.non_withdrawable_balance,
+        amount: fundAdd,
+        balanceAfter: newBalance,
+      });
+      const currentBonusBalance = Number(account.bonus_balance || 0);
+      const newEquity = newBalance + currentBonusBalance;
+
+      await Account.updateOne(
+        { _id: account._id },
+        {
+          $set: {
+            balance: newBalance,
+            non_withdrawable_balance: nextLockedBalance,
+            equity: newEquity,
+          },
+        },
+        { session },
+      );
+
+      await Transaction.create(
+        [
+          {
+            user: account.user_id,
+            account: account._id,
+            type: "TRADABLE_FUND",
+            amount: fundAdd,
+            balanceAfter: newBalance,
+            equityAfter: newEquity,
+            status: "SUCCESS",
+            referenceType: "SYSTEM",
+            referenceId: account._id,
+            createdBy: adminId,
+            remark: reason
+              ? `Transfer by ALS User - ${reason}`
+              : "Transfer by ALS User",
+          },
+        ],
+        { session },
+      );
+
+      result = {
+        accountId: String(account._id),
+        userId: String(account.user_id),
+        tradableFundAdded: fundAdd,
+        realBalance: newBalance,
+        bonusBalance: currentBonusBalance,
+        nonWithdrawableBalance: nextLockedBalance,
+        equity: newEquity,
+        totalBalance: newEquity,
+      };
+    });
+  } finally {
+    session.endSession();
+  }
+
+  if (result?.accountId) {
+    try {
+      publishAccountBalance(result.accountId, result.realBalance, result.bonusBalance);
+      await EngineSync.updateBalance(result.accountId, result.realBalance, {
+        bonusBalance: result.bonusBalance,
+      });
+    } catch (err) {
+      console.error(
+        "[TRADABLE_FUND] EngineSync.updateBalance failed (admin credit)",
         err?.message || err,
       );
     }

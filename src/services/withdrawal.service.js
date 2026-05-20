@@ -7,6 +7,9 @@ import Trade from "../models/Trade.model.js";
 import EngineSync from "../trade-engine/EngineSync.js";
 import { publishAccountBalance } from "../trade-engine/EngineSyncBus.js";
 import { getEffectiveBonusPercentForAccount } from "./bonus.service.js";
+import {
+  getWithdrawableBalance,
+} from "../utils/nonWithdrawable.util.js";
 
 /* -------------------- HELPERS -------------------- */
 
@@ -204,8 +207,12 @@ export const adminCreateWithdrawal = async ({
       /* =========================
          BALANCE CHECK
       ========================== */
-      if (amount > account.balance) {
-        throw new Error("Insufficient balance");
+      const withdrawableBalance = getWithdrawableBalance(account);
+
+      if (amount > withdrawableBalance) {
+        throw new Error(
+          `Only $${withdrawableBalance.toFixed(2)} is withdrawable in this account`,
+        );
       }
 
       const bonusPercent = await getEffectiveBonusPercentForAccount(account);
@@ -461,8 +468,12 @@ export const createWithdrawal = async ({ userId, ipAddress, payload }) => {
       const holdBalance =
         typeof account.hold_balance === "number" ? account.hold_balance : 0;
 
-      if (amount > account.balance) {
-        throw new Error("Insufficient balance");
+      const withdrawableBalance = getWithdrawableBalance(account);
+
+      if (amount > withdrawableBalance) {
+        throw new Error(
+          `Only $${withdrawableBalance.toFixed(2)} is withdrawable in this account`,
+        );
       }
 
       const bonusPercent = await getEffectiveBonusPercentForAccount(account);

@@ -6,6 +6,7 @@ import Trade from "../models/Trade.model.js";
 import Transaction from "../models/Transaction.model.js";
 import EngineSync from "../trade-engine/EngineSync.js";
 import { publishAccountBalance } from "../trade-engine/EngineSyncBus.js";
+import { consumeNonWithdrawableBalance } from "../utils/nonWithdrawable.util.js";
 
 function formatYmd(date, timeZone) {
   if (timeZone) {
@@ -187,6 +188,25 @@ export async function runSwapRollover({
             // Prevent negative balances (Transaction.balanceAfter enforces min: 0).
             const filter = { ...baseFilter, balance: { $gte: swapToCharge } };
 
+            const existingAccount = await Account.findById(item.accountId)
+              .select("balance non_withdrawable_balance")
+              .session(session)
+              .lean();
+
+            if (!existingAccount) {
+              continue;
+            }
+
+            const projectedBalanceAfter = Math.max(
+              0,
+              Number(existingAccount.balance || 0) - swapToCharge,
+            );
+            const nextLockedBalance = consumeNonWithdrawableBalance({
+              currentLocked: existingAccount.non_withdrawable_balance,
+              amount: swapToCharge,
+              balanceAfter: projectedBalanceAfter,
+            });
+
             const accountAfter = await Account.findOneAndUpdate(
               filter,
               [
@@ -195,6 +215,7 @@ export async function runSwapRollover({
                     // Keep DB equity aligned with balance for non-price operations.
                     // (Real-time equity is tracked inside trade-engine RAM.)
                     balance: { $subtract: ["$balance", swapToCharge] },
+                    non_withdrawable_balance: nextLockedBalance,
                     equity: {
                       $add: [
                         { $subtract: ["$balance", swapToCharge] },

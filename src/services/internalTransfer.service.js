@@ -7,6 +7,7 @@ import Trade from "../models/Trade.model.js";
 
 import EngineSync from "../trade-engine/EngineSync.js";
 import { publishAccountBalance } from "../trade-engine/EngineSyncBus.js";
+import { getWithdrawableBalance } from "../utils/nonWithdrawable.util.js";
 
 /* =====================================================
    HELPERS
@@ -233,8 +234,12 @@ export async function createInternalTransferService({
 
     /* ================= BALANCE CHECK ================= */
 
-    if (fromAcc.balance < amount) {
-      throw publicError("Insufficient balance");
+    const withdrawableBalance = getWithdrawableBalance(fromAcc);
+
+    if (amount > withdrawableBalance) {
+      throw publicError(
+        `Only $${withdrawableBalance.toFixed(2)} is transferable from this account`,
+      );
     }
 
     /* ================= UPDATE BALANCES ================= */
@@ -459,8 +464,12 @@ export async function adminCreateInternalTransferService({
       throw publicError(`Complete first deposit of $${plan?.minDeposit || 0}`);
     }
 
-    if (fromAcc.balance < amount) {
-      throw publicError("Insufficient balance");
+    const withdrawableBalance = getWithdrawableBalance(fromAcc);
+
+    if (amount > withdrawableBalance) {
+      throw publicError(
+        `Only $${withdrawableBalance.toFixed(2)} is transferable from this account`,
+      );
     }
 
     const fromNew = fromAcc.balance - amount;

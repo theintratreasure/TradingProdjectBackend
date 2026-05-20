@@ -261,6 +261,7 @@ export async function getUserAccounts(userId) {
       spread_enabled: 1,
 
       balance: 1,
+      non_withdrawable_balance: 1,
       equity: 1,
       bonus_balance: 1,
       bonus_granted: 1,
@@ -304,6 +305,7 @@ export async function getUserAccountDetail({ userId, accountId }) {
       swap_enabled: 1,
 
       balance: 1,
+      non_withdrawable_balance: 1,
       equity: 1,
       bonus_balance: 1,
       bonus_granted: 1,
@@ -432,7 +434,7 @@ export async function adminListUserAccounts({ userId, query = {} }) {
   const [items, total] = await Promise.all([
     Account.find(filter)
       .select(
-        "_id user_id account_plan_id account_number account_type plan_name leverage spread_enabled spread_pips commission_per_lot swap_enabled swap_charge balance hold_balance equity bonus_balance bonus_granted bonus_percent_override currency first_deposit status createdAt updatedAt"
+        "_id user_id account_plan_id account_number account_type plan_name leverage spread_enabled spread_pips commission_per_lot swap_enabled swap_charge balance hold_balance non_withdrawable_balance equity bonus_balance bonus_granted bonus_percent_override currency first_deposit status createdAt updatedAt"
       )
       .sort({ createdAt: -1 })
       .skip(skip)
@@ -524,6 +526,7 @@ export async function adminSearchAccounts({ query = {} }) {
               swap_charge: 1,
               balance: 1,
               hold_balance: 1,
+              non_withdrawable_balance: 1,
               equity: 1,
               bonus_balance: 1,
               bonus_granted: 1,

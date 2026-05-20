@@ -5,6 +5,7 @@ import {
   adminGetBonusSettings,
   adminUpdateBonusSettings,
   adminCreditBonus,
+  adminCreditTradableFund,
 } from "../../controllers/bonus.controller.js";
 
 const router = express.Router();
@@ -16,5 +17,11 @@ router.put("/settings", authMiddleware, adminAuth, adminUpdateBonusSettings);
 // Admin manual credit
 router.post("/admin/credit", authMiddleware, adminAuth, adminCreditBonus);
 router.post("/admin/add-bonus", authMiddleware, adminAuth, adminCreditBonus);
+router.post(
+  "/admin/add-tradable-fund",
+  authMiddleware,
+  adminAuth,
+  adminCreditTradableFund,
+);
 
 export default router;

@@ -5,6 +5,7 @@ import PendingOrder from "../models/PendingOrder.model.js";
 import Brokerage from "../models/Brokerage.model.js";
 import { engineEvents } from "./EngineEvents.js";
 import { publishAccountBalance } from "./EngineSyncBus.js";
+import { consumeNonWithdrawableBalance } from "../utils/nonWithdrawable.util.js";
 
 class LedgerQueue {
   constructor() {
@@ -209,6 +210,7 @@ class LedgerQueue {
 
     const currentRealBalance = Number(account.balance || 0);
     const currentBonus = Number(account.bonus_balance || 0);
+    const currentLockedBalance = Number(account.non_withdrawable_balance || 0);
     let bonusDeductValue = Number(bonusDeduct);
     if (!Number.isFinite(bonusDeductValue) || bonusDeductValue < 0) {
       bonusDeductValue = 0;
@@ -225,6 +227,15 @@ class LedgerQueue {
       : bonusDeductValue > 0
         ? Math.max(0, currentBonus - bonusDeductValue)
         : currentBonus;
+    const projectedBalanceAfter = Math.max(0, currentRealBalance + pnl);
+    const nextLockedBalance =
+      pnl < 0
+        ? consumeNonWithdrawableBalance({
+            currentLocked: currentLockedBalance,
+            amount: Math.abs(pnl),
+            balanceAfter: projectedBalanceAfter,
+          })
+        : Math.min(projectedBalanceAfter, currentLockedBalance);
 
     const accountAfter = await Account.findOneAndUpdate(
       { _id: accountId },
@@ -235,6 +246,7 @@ class LedgerQueue {
               $max: [0, { $add: [{ $ifNull: ["$balance", 0] }, pnl] }],
             },
             bonus_balance: newBonusBalance,
+            non_withdrawable_balance: nextLockedBalance,
           },
         },
         {

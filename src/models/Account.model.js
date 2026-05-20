@@ -102,6 +102,12 @@ const AccountSchema = new mongoose.Schema(
       min: 0,
     },
 
+    non_withdrawable_balance: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
     equity: {
       type: Number,
       default: 0,

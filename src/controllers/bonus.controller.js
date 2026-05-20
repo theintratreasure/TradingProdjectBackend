@@ -2,6 +2,7 @@ import {
   getBonusSettingsService,
   upsertBonusSettingsService,
   adminCreditBonusService,
+  adminCreditTradableFundService,
 } from "../services/bonus.service.js";
 
 export async function adminGetBonusSettings(req, res) {
@@ -45,6 +46,27 @@ export async function adminCreditBonus(req, res) {
     return res.status(200).json({
       success: true,
       message: "Bonus added successfully",
+      data,
+    });
+  } catch (err) {
+    return res.status(400).json({ success: false, message: err.message });
+  }
+}
+
+export async function adminCreditTradableFund(req, res) {
+  try {
+    const { userId, accountId, amount, tradableFundAmount, reason } = req.body || {};
+    const data = await adminCreditTradableFundService({
+      adminId: req.user?._id || null,
+      userId,
+      accountId,
+      amount: Number(amount),
+      tradableFundAmount: Number(tradableFundAmount),
+      reason,
+    });
+    return res.status(200).json({
+      success: true,
+      message: "Tradable fund added successfully",
       data,
     });
   } catch (err) {
