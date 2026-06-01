@@ -31,6 +31,15 @@ const STOCK_URL = `${process.env.ALLTICK_STOCK_WS_URL}?token=${ALLTICK_TOKEN}`;
 
 const REDIS_URL = process.env.REDIS_URL || "redis://127.0.0.1:6379";
 const REDIS_CHANNEL = "engine:events";
+const SILVER_FALLBACK_ENABLED =
+  String(process.env.SILVER_FALLBACK_ENABLED || "true").toLowerCase() !==
+  "false";
+const SILVER_FALLBACK_INTERVAL_MS = Math.max(
+  3000,
+  Number(process.env.SILVER_FALLBACK_INTERVAL_MS || 5000),
+);
+const SILVER_FALLBACK_YAHOO_SYMBOL =
+  process.env.SILVER_FALLBACK_YAHOO_SYMBOL || "SI=F";
 
 // Debug flags
 const DBG_VERBOSE = String(process.env.ALLTICK_DEBUG || "0") === "1" || String(process.env.ALLTICK_DEBUG || "0") === "true";
@@ -70,6 +79,145 @@ const safeNum = (v) => {
   const n = Number(v);
   return Number.isFinite(n) ? n : NaN;
 };
+
+const firstFiniteNumber = (...values) => {
+  for (const value of values) {
+    if (value === null || value === undefined || value === "") continue;
+    const n = safeNum(value);
+    if (Number.isFinite(n)) return n;
+  }
+  return NaN;
+};
+
+let silverFallbackTimer = null;
+let silverFallbackLast = null;
+
+function isSilverSymbol(value) {
+  const s = normalizeSymbol(value);
+  return s === "SILVER" || s === "XAGUSD";
+}
+
+function hasSilverSubscribers() {
+  const silverKey = makeKey("crypto", "SILVER");
+  const xagKey = makeKey("crypto", "XAGUSD");
+
+  for (const subs of clientSubscriptions.values()) {
+    if (subs?.has(silverKey) || subs?.has(xagKey)) return true;
+  }
+  return false;
+}
+
+function lastFiniteNumber(values) {
+  if (!Array.isArray(values)) return null;
+  for (let i = values.length - 1; i >= 0; i -= 1) {
+    const n = safeNum(values[i]);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+async function fetchSilverFallbackQuote() {
+  const encoded = encodeURIComponent(SILVER_FALLBACK_YAHOO_SYMBOL);
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encoded}?range=1d&interval=1m`;
+
+  const resp = await fetch(url, {
+    headers: { "User-Agent": "Mozilla/5.0" },
+  });
+
+  if (!resp.ok) {
+    throw new Error(`silver fallback http ${resp.status}`);
+  }
+
+  const json = await resp.json();
+  const result = json?.chart?.result?.[0];
+  const quote = result?.indicators?.quote?.[0] || {};
+  const meta = result?.meta || {};
+
+  const latestClose = lastFiniteNumber(quote.close);
+  const price = firstFiniteNumber(
+    latestClose,
+    meta.regularMarketPrice,
+    meta.previousClose,
+  );
+
+  if (!Number.isFinite(price) || price <= 0) {
+    throw new Error("silver fallback missing price");
+  }
+
+  const open = firstFiniteNumber(
+    lastFiniteNumber(quote.open),
+    meta.regularMarketOpen,
+    price,
+  );
+  const high = Math.max(
+    lastFiniteNumber(quote.high) ?? price,
+    price,
+  );
+  const low = Math.min(
+    lastFiniteNumber(quote.low) ?? price,
+    price,
+  );
+  const close = firstFiniteNumber(meta.previousClose, price);
+
+  return {
+    price,
+    open,
+    high,
+    low,
+    close,
+    updatedAt: Date.now(),
+    source: "yahoo_silver_fallback",
+  };
+}
+
+async function pushSilverFallbackTick() {
+  if (!SILVER_FALLBACK_ENABLED || !hasSilverSubscribers()) {
+    if (silverFallbackTimer) {
+      clearInterval(silverFallbackTimer);
+      silverFallbackTimer = null;
+    }
+    return;
+  }
+
+  try {
+    silverFallbackLast = await fetchSilverFallbackQuote();
+    const mid = silverFallbackLast.price;
+    const bid = Number((mid - 0.01).toFixed(5));
+    const ask = Number((mid + 0.01).toFixed(5));
+    const ts = String(Date.now());
+
+    const data = {
+      code: "SILVER",
+      seq: ts,
+      tick_time: ts,
+      bids: [{ price: bid, volume: "1" }],
+      asks: [{ price: ask, volume: "1" }],
+      dayOpen: silverFallbackLast.open,
+      dayHigh: silverFallbackLast.high,
+      dayLow: silverFallbackLast.low,
+      dayClose: silverFallbackLast.close,
+      source: silverFallbackLast.source,
+    };
+
+    broadcastData("crypto", data);
+    broadcastData("crypto", { ...data, code: "XAGUSD" });
+    feedEnginePrice(data);
+  } catch (err) {
+    WARN("[SILVER-FALLBACK] failed", err?.message || err);
+  }
+}
+
+function startSilverFallbackIfNeeded(symbols = []) {
+  if (!SILVER_FALLBACK_ENABLED) return;
+  if (!symbols.some(isSilverSymbol)) return;
+  if (!silverFallbackTimer) {
+    silverFallbackTimer = setInterval(
+      pushSilverFallbackTick,
+      SILVER_FALLBACK_INTERVAL_MS,
+    );
+  }
+  pushSilverFallbackTick();
+}
 
 // Lightweight DBG functions controlled by env
 function DBG(...args) {
@@ -723,7 +871,9 @@ function broadcastData(market, data) {
         skipReason = { reason: "bad_prices", bestBidRaw, bestAskRaw };
       } else {
         // try to fetch symbol object from engine
-        const sym = findSymbolInEngine(symbol);
+        const sym = isSilverSymbol(symbol)
+          ? findSymbolInEngine("SILVER") || findSymbolInEngine("XAGUSD")
+          : findSymbolInEngine(symbol);
         if (!sym) {
           skipReason = { reason: "symbol_missing_in_engine", symbol, engineSymbolCount: tradeEngine.symbols?.size ?? 0 };
         } else {
@@ -731,7 +881,7 @@ function broadcastData(market, data) {
 
           // try engine.formatPrice (if exists)
           let formatted = null;
-          if (typeof tradeEngine.formatPrice === "function") {
+          if (!isSilverSymbol(symbol) && typeof tradeEngine.formatPrice === "function") {
             try {
               const maybe = tradeEngine.formatPrice(accountForPrice, sym, bestBid, bestAsk);
               if (maybe && typeof maybe.bid === "number" && typeof maybe.ask === "number" && Number.isFinite(maybe.bid) && Number.isFinite(maybe.ask)) {
@@ -751,8 +901,17 @@ function broadcastData(market, data) {
               typeof sym.spread_mode === "string"
                 ? sym.spread_mode.trim().toUpperCase()
                 : "ADD_ON";
-            const tick = typeof sym.tickSize === "number" ? sym.tickSize : 0;
-            const prec = typeof sym.pricePrecision === "number" ? sym.pricePrecision : undefined;
+            const silverQuote = isSilverSymbol(symbol);
+            const tick = silverQuote
+              ? 0.00001
+              : typeof sym.tickSize === "number"
+              ? sym.tickSize
+              : 0;
+            const prec = silverQuote
+              ? 5
+              : typeof sym.pricePrecision === "number"
+              ? sym.pricePrecision
+              : undefined;
 
             let pbid = bestBid;
             let pask = bestAsk;
@@ -982,8 +1141,11 @@ export async function handleClientMessage(clientWs, msg) {
       const market = normalizeMarket(data.market);
       const symbol = normalizeSymbol(data.symbol);
       const providerSymbol = await resolveInstrumentProviderCode(data.symbol);
+      const subscribeSymbols = Array.from(
+        new Set([providerSymbol, symbol].map(normalizeProviderCode).filter(Boolean)),
+      );
 
-      if (!market || !symbol || !providerSymbol) {
+      if (!market || !symbol || subscribeSymbols.length === 0) {
         try {
           clientWs.send(JSON.stringify({ status: "error", error: "invalid market or symbol" }));
         } catch {}
@@ -1016,18 +1178,48 @@ export async function handleClientMessage(clientWs, msg) {
         INFO(`client ${clientWs.clientId} subscribed with account ${accountId} engineAccount=${clientWs.engineAccount ? "loaded" : "missing"}`);
       }
 
-      const key = makeKey(market, symbol);
-      subs.add(key);
+      subs.add(makeKey(market, symbol));
+      for (const subSymbol of subscribeSymbols) {
+        subs.add(makeKey(market, subSymbol));
+      }
 
-      if (market === "crypto") wsCrypto.subscribe(providerSymbol);
-      if (market === "stock") wsStock.subscribe(providerSymbol);
+      for (const subSymbol of subscribeSymbols) {
+        if (market === "crypto") wsCrypto.subscribe(subSymbol);
+        if (market === "stock") wsStock.subscribe(subSymbol);
+      }
+
+      if (market === "crypto") {
+        startSilverFallbackIfNeeded(subscribeSymbols);
+      }
 
       // fetch day high/low (best-effort)
       let hl = null;
-      try {
-        hl = await HighLowService.getDayHighLow(market, providerSymbol);
-      } catch (err) {
-        DBG("HighLowService failed", err && err.message ? err.message : err);
+      for (const subSymbol of subscribeSymbols) {
+        try {
+          const candidate = await HighLowService.getDayHighLow(market, subSymbol);
+          if (candidate?.data) {
+            hl = candidate;
+            break;
+          }
+        } catch (err) {
+          DBG("HighLowService failed", subSymbol, err && err.message ? err.message : err);
+        }
+      }
+
+      if (!hl?.data && market === "crypto" && subscribeSymbols.some(isSilverSymbol)) {
+        try {
+          const silver = silverFallbackLast || (await fetchSilverFallbackQuote());
+          hl = {
+            data: {
+              open: silver.open,
+              high: silver.high,
+              low: silver.low,
+              close: silver.close,
+            },
+          };
+        } catch (err) {
+          DBG("Silver fallback OHLC failed", err && err.message ? err.message : err);
+        }
       }
 
       try {
@@ -1036,6 +1228,7 @@ export async function handleClientMessage(clientWs, msg) {
             status: "subscribed",
             symbol,
             providerSymbol,
+            subscribeSymbols,
             accountId: clientWs.accountId || null,
             dayOpen: hl?.data?.open ?? null,
             dayHigh: hl?.data?.high ?? null,
@@ -1056,6 +1249,10 @@ export async function handleClientMessage(clientWs, msg) {
       const symbol = normalizeSymbol(data.symbol);
       const key = makeKey(market, symbol);
       subs.delete(key);
+      if (isSilverSymbol(symbol)) {
+        subs.delete(makeKey(market, "SILVER"));
+        subs.delete(makeKey(market, "XAGUSD"));
+      }
       try {
         clientWs.send(JSON.stringify({ status: "unsubscribed", symbol }));
       } catch (err) {
