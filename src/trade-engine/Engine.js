@@ -1192,6 +1192,7 @@ export class Engine {
             openPrice: pos.openPrice,
             currentPrice,
             floatingPnL: Number(pos.floatingPnL.toFixed(2)),
+            contractSize: pos.contractSize ?? sym?.contractSize ?? null,
             stopLoss: pos.stopLoss,
             takeProfit: pos.takeProfit,
             commission: pos.commission || 0,

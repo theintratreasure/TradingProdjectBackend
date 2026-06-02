@@ -13,6 +13,7 @@ import dotenv from "dotenv";
 import Redis from "ioredis";
 import { HighLowService } from "../services/highlow.service.js";
 import {
+  findInstrumentByAnySymbol,
   normalizeProviderCode,
   resolveInstrumentProviderCode,
 } from "../services/instrumentProvider.service.js";
@@ -67,6 +68,11 @@ const normalizeMarket = (v) =>
   String(v || "")
     .trim()
     .toLowerCase();
+const normalizeFeedMarket = (v) => {
+  const market = normalizeMarket(v);
+  if (market === "stock") return "stock";
+  return "crypto";
+};
 const normalizeSymbol = (v) =>
   String(v || "")
     .trim()
@@ -98,11 +104,15 @@ function isSilverSymbol(value) {
 }
 
 function hasSilverSubscribers() {
-  const silverKey = makeKey("crypto", "SILVER");
-  const xagKey = makeKey("crypto", "XAGUSD");
+  const silverKeys = [
+    makeKey("crypto", "SILVER"),
+    makeKey("crypto", "XAGUSD"),
+    makeKey("metal", "SILVER"),
+    makeKey("metal", "XAGUSD"),
+  ];
 
   for (const subs of clientSubscriptions.values()) {
-    if (subs?.has(silverKey) || subs?.has(xagKey)) return true;
+    if (silverKeys.some((key) => subs?.has(key))) return true;
   }
   return false;
 }
@@ -808,6 +818,7 @@ function forwardEventToLocalClients(eventType, payload) {
 // Detailed debug reasons are logged for any client that didn't get spread.
 // ========================
 function broadcastData(market, data) {
+  const feedMarket = normalizeFeedMarket(market);
   const raw =
     data?.code ||
     data?.symbol ||
@@ -818,7 +829,7 @@ function broadcastData(market, data) {
   const symbol = normalizeSymbol(raw);
   if (!symbol) return;
 
-  const key = makeKey(market, symbol);
+  const keys = new Set([makeKey(market, symbol), makeKey(feedMarket, symbol)]);
 
   const bestBidRaw = data?.bids?.[0]?.price;
   const bestAskRaw = data?.asks?.[0]?.price;
@@ -836,7 +847,7 @@ function broadcastData(market, data) {
     if (!ws || ws.readyState !== WebSocket.OPEN) continue;
     if (!ws.routes || !ws.routes.has("market")) continue;
     const subs = clientSubscriptions.get(id);
-    if (!subs || !subs.has(key)) continue;
+    if (!subs || !Array.from(keys).some((key) => subs.has(key))) continue;
 
     try {
       // default: raw data (clone so we don't mutate original)
@@ -995,7 +1006,32 @@ function broadcastData(market, data) {
 // ========================
 // FEED PRICE TO TRADE ENGINE
 // ========================
-function feedEnginePrice(data) {
+async function resolveEngineSymbol(raw) {
+  const normalized = normalizeSymbol(raw);
+  const stripped = normalized.startsWith("FX")
+    ? normalized.replace(/^FX/, "")
+    : normalized;
+
+  const candidates = [stripped];
+  if (stripped === "GOLD") candidates.push("XAUUSD");
+  if (stripped === "SILVER") candidates.push("XAGUSD");
+
+  for (const candidate of candidates) {
+    if (findSymbolInEngine(candidate)) return candidate;
+  }
+
+  try {
+    const instrument = await findInstrumentByAnySymbol(normalized);
+    const code = normalizeSymbol(instrument?.code);
+    if (code && findSymbolInEngine(code)) return code;
+  } catch (err) {
+    DBG("resolveEngineSymbol failed", normalized, err && err.message ? err.message : err);
+  }
+
+  return stripped;
+}
+
+async function feedEnginePrice(data) {
   const raw =
     data?.code ||
     data?.symbol ||
@@ -1003,10 +1039,7 @@ function feedEnginePrice(data) {
     data?.instrument ||
     data?.instrument_code;
 
-  const normalized = normalizeSymbol(raw);
-  const symbol = normalized.startsWith("FX")
-    ? normalized.replace(/^FX/, "")
-    : normalized;
+  const symbol = await resolveEngineSymbol(raw);
 
   const bestBid = data?.bids?.[0]?.price;
   const bestAsk = data?.asks?.[0]?.price;
@@ -1017,7 +1050,7 @@ function feedEnginePrice(data) {
   DBG("onTick feed ->", symbol, "bid", bid, "ask", ask);
 
   try {
-    if (typeof tradeEngine.onTick === "function") {
+    if (symbol && typeof tradeEngine.onTick === "function") {
       tradeEngine.onTick(symbol, bid, ask);
     } else {
       DBG("tradeEngine.onTick missing");
@@ -1139,6 +1172,7 @@ export async function handleClientMessage(clientWs, msg) {
     // MARKET subscribe (supports inline accountId)
     if (data.type === "subscribe") {
       const market = normalizeMarket(data.market);
+      const feedMarket = normalizeFeedMarket(market);
       const symbol = normalizeSymbol(data.symbol);
       const providerSymbol = await resolveInstrumentProviderCode(data.symbol);
       const subscribeSymbols = Array.from(
@@ -1179,16 +1213,18 @@ export async function handleClientMessage(clientWs, msg) {
       }
 
       subs.add(makeKey(market, symbol));
+      subs.add(makeKey(feedMarket, symbol));
       for (const subSymbol of subscribeSymbols) {
         subs.add(makeKey(market, subSymbol));
+        subs.add(makeKey(feedMarket, subSymbol));
       }
 
       for (const subSymbol of subscribeSymbols) {
-        if (market === "crypto") wsCrypto.subscribe(subSymbol);
-        if (market === "stock") wsStock.subscribe(subSymbol);
+        if (feedMarket === "crypto") wsCrypto.subscribe(subSymbol);
+        if (feedMarket === "stock") wsStock.subscribe(subSymbol);
       }
 
-      if (market === "crypto") {
+      if (feedMarket === "crypto") {
         startSilverFallbackIfNeeded(subscribeSymbols);
       }
 
@@ -1196,7 +1232,7 @@ export async function handleClientMessage(clientWs, msg) {
       let hl = null;
       for (const subSymbol of subscribeSymbols) {
         try {
-          const candidate = await HighLowService.getDayHighLow(market, subSymbol);
+          const candidate = await HighLowService.getDayHighLow(feedMarket, subSymbol);
           if (candidate?.data) {
             hl = candidate;
             break;
@@ -1206,7 +1242,7 @@ export async function handleClientMessage(clientWs, msg) {
         }
       }
 
-      if (!hl?.data && market === "crypto" && subscribeSymbols.some(isSilverSymbol)) {
+      if (!hl?.data && feedMarket === "crypto" && subscribeSymbols.some(isSilverSymbol)) {
         try {
           const silver = silverFallbackLast || (await fetchSilverFallbackQuote());
           hl = {
@@ -1246,12 +1282,15 @@ export async function handleClientMessage(clientWs, msg) {
     if (data.type === "unsubscribe") {
       if (!clientWs.routes.has("market")) return;
       const market = normalizeMarket(data.market);
+      const feedMarket = normalizeFeedMarket(market);
       const symbol = normalizeSymbol(data.symbol);
-      const key = makeKey(market, symbol);
-      subs.delete(key);
+      subs.delete(makeKey(market, symbol));
+      subs.delete(makeKey(feedMarket, symbol));
       if (isSilverSymbol(symbol)) {
         subs.delete(makeKey(market, "SILVER"));
         subs.delete(makeKey(market, "XAGUSD"));
+        subs.delete(makeKey(feedMarket, "SILVER"));
+        subs.delete(makeKey(feedMarket, "XAGUSD"));
       }
       try {
         clientWs.send(JSON.stringify({ status: "unsubscribed", symbol }));
@@ -1363,6 +1402,7 @@ export async function handleClientMessage(clientWs, msg) {
                 openPrice: pos.openPrice,
                 currentPrice: currentPriceToSend,
                 floatingPnL: Number((pos.floatingPnL || 0).toFixed(2)),
+                contractSize: pos.contractSize ?? sym?.contractSize ?? null,
                 stopLoss: pos.stopLoss ?? null,
                 takeProfit: pos.takeProfit ?? null,
                 commission: pos.commission || 0,
