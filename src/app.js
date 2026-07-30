@@ -17,6 +17,7 @@ origin: [
   "https://fptrades.com",
   "https://admin.fptrades.com",
   "https://user.fptrades.com",
+  "https://user.fptradess.com",
 ],
 
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
