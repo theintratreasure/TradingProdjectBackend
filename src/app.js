@@ -14,9 +14,9 @@ origin: [
   "https://trade-portal-uiub.vercel.app",
   "https://admin-dashboard-wheat-pi-59.vercel.app",
   "http://localhost:5173",
-  "https://alstrades.com",
-  "https://admin.alstrades.com",
-  "https://user.alstrades.com",
+  "https://fptrades.com",
+  "https://admin.fptrades.com",
+  "https://user.fptrades.com",
 ],
 
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],

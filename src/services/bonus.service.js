@@ -329,8 +329,8 @@ export async function adminCreditTradableFundService({
             referenceId: account._id,
             createdBy: adminId,
             remark: reason
-              ? `Transfer by ALS User - ${reason}`
-              : "Transfer by ALS User",
+              ? `Transfer by FP User - ${reason}`
+              : "Transfer by FP User",
           },
         ],
         { session },

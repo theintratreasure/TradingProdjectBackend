@@ -290,6 +290,24 @@ export async function getDealsService({
   ========================== */
   const trades = await Trade.find(match).sort({ openTime: -1 }).lean();
 
+  // MT5 shows successful balance operations in the Deals history alongside
+  // executions. A symbol-filtered view remains trade-only because balance
+  // operations do not belong to an instrument.
+  const balanceTransactionMatch = {
+    account: accountObjectId,
+    status: "SUCCESS",
+    type: { $in: ["DEPOSIT", "WITHDRAWAL"] },
+  };
+  if (openTimeFilter) {
+    balanceTransactionMatch.createdAt = openTimeFilter;
+  }
+  const balanceTransactions =
+    symbolFilter.length === 0
+      ? await Transaction.find(balanceTransactionMatch)
+          .sort({ createdAt: -1 })
+          .lean()
+      : [];
+
   /* =========================
      BUILD MT5 DEALS (IN + OUT)
   ========================== */
@@ -345,6 +363,36 @@ export async function getDealsService({
         comment: "",
       });
     }
+  }
+
+  for (const transaction of balanceTransactions) {
+    const isWithdrawal = transaction.type === "WITHDRAWAL";
+    const signedAmount = isWithdrawal
+      ? -Number(transaction.amount || 0)
+      : Number(transaction.amount || 0);
+
+    deals.push({
+      time: transaction.createdAt,
+      date: transaction.createdAt,
+      deal: String(transaction._id),
+      order: null,
+      tradeId: String(transaction._id),
+      symbol: "",
+      type: "BALANCE",
+      transactionType: transaction.type,
+      direction: "balance",
+      volume: 0,
+      price: 0,
+      swap: 0,
+      commission: 0,
+      fee: 0,
+      pnl: signedAmount,
+      profit: signedAmount,
+      balance: Number(transaction.balanceAfter),
+      comment:
+        transaction.remark ||
+        (isWithdrawal ? "Withdrawal" : "Deposit"),
+    });
   }
 
   /* =========================
