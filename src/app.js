@@ -16,6 +16,7 @@ origin: [
   "http://localhost:5173",
   "https://fptrades.com",
   "https://admin.fptrades.com",
+  "https://admin.fptradess.com",
   "https://user.fptrades.com",
   "https://user.fptradess.com",
 ],
